@@ -10,6 +10,7 @@ public sealed record AngleResult
 public static class StraightenPipeline
 {
     private const int DetectionMaxSide = 1024;
+    private const int OcrMaxSide       = 1536;
 
     public static AngleResult ProcessFile(string inputPath, string outputPath, Options options)
     {
@@ -49,6 +50,21 @@ public static class StraightenPipeline
             var scratch    = Path.GetTempPath();
             var scored     = new List<(double Angle, double Score)>();
 
+            // OCR needs more resolution than the projection sweep: small label text is
+            // illegible at the detection scale, exactly where discrimination is needed.
+            var       ocrScale = Math.Min(1.0, (double)OcrMaxSide / Math.Max(src.Width, src.Height));
+            using var ocrGray  = new Mat();
+
+            if(ocrScale < 1.0)
+                Cv2.Resize(gray, ocrGray, default, ocrScale, ocrScale, InterpolationFlags.Area);
+            else
+                gray.CopyTo(ocrGray);
+
+            var ocrDisc = new Disc(new Point2f((float)(smallDisc.Center.X / scale * ocrScale),
+                                               (float)(smallDisc.Center.Y / scale * ocrScale)),
+                                   (float)(smallDisc.Radius / scale * ocrScale),
+                                   smallDisc.Method);
+
             if(OcrUprightResolver.IsAvailable)
             {
                 // Labels often carry deliberately tilted text blocks that win the projection
@@ -59,7 +75,7 @@ public static class StraightenPipeline
                                 candidate.Angle, candidate.Angle + 180
                             })
                     {
-                        var score = OcrUprightResolver.OcrScore(small, smallDisc, orientation, scratch) ?? 0;
+                        var score = OcrUprightResolver.OcrScore(ocrGray, ocrDisc, orientation, scratch) ?? 0;
 
                         if(Environment.GetEnvironmentVariable("CDSCAN_DEBUG") is not null)
                             Console.Error
