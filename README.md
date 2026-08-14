@@ -48,6 +48,7 @@ A progress bar with ETA is shown on stderr while running; per-file results print
 | `--debug-dir <dir>` | Write annotated intermediates: detected disc/hub overlay with an "up" arrow, and a polar unwrap of the label. |
 | `--min-confidence <n>` | Below this confidence the image is copied unrotated with a warning (default `1.5`). |
 | `--overwrite` | Overwrite existing files in the output folder (default: skip them). |
+| `--ocr-langs <langs>` | Tesseract language(s) for orientation OCR, e.g. `eng` or `eng+spa` (default `auto` = all installed packs). |
 
 ### Recommended workflow for large batches
 
@@ -76,11 +77,12 @@ was actually used or suppressed by `--min-confidence`. `method` records which st
 2. **Angle estimation** — classic projection-profile method: the label's edge map is
    rotated through candidate angles (2° coarse sweep, 0.25° refinement) and scored by the
    variance of its horizontal row sums; upright horizontal text lines give a peaky profile.
-   The top sweep peaks (≥ 15° apart) are kept as candidates, **plus 0°** — carefully placed
+   The top sweep peaks (≥ 8° apart) are kept as candidates, **plus 0°** — carefully placed
    scans are common, and artwork with deliberately tilted text blocks can out-score the
    design's true upright.
 3. **Orientation selection** — with `tesseract` on `PATH`, every candidate is OCRed in both
-   180° orientations and the most legible wins. Confidence is how decisively the winner
+   180° orientations and the most legible wins. All installed language packs are used by
+   default (`--ocr-langs` overrides) — install the packs matching your discs' languages. Confidence is how decisively the winner
    out-reads the runner-up. Without tesseract, the best projection peak is used with a
    typography heuristic (ink-mass position within text-line bands) for the 180° ambiguity,
    and confidence is the sweep's peak-to-median variance ratio.
@@ -123,9 +125,10 @@ Any OpenAI-compatible endpoint works:
   `"http://localhost:1234/v1"`, load a vision model (e.g. `qwen/qwen3-vl-8b`) and set it
   as `Model`; no `ApiKey` needed.
 
-The fallback only runs for images below `--min-confidence`, and it is best-effort: the
-first failed request (server down, bad key, timeout) disables it for the rest of the run
-and processing continues without it. Files it decided are tagged `+openai` in the report's
+The fallback only runs for images below `--min-confidence`. Requests are serialized (one
+at a time) so a local inference server is never flooded by the parallel workers. It is
+best-effort: the first failed request (server down, bad key, timeout) disables it for the
+rest of the run and processing continues without it. Files it decided are tagged `+openai` in the report's
 `method` column for auditing.
 
 ## Debugging detection
