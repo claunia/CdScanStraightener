@@ -59,6 +59,12 @@ var minConfidenceOpt = new Option<double>("--min-confidence")
     DefaultValueFactory = _ => 1.5,
 };
 
+var ocrLangsOpt = new Option<string>("--ocr-langs")
+{
+    Description         = "Tesseract language(s) for orientation OCR, e.g. \"eng\" or \"eng+spa\" (default: all installed).",
+    DefaultValueFactory = _ => "auto",
+};
+
 var overwriteOpt = new Option<bool>("--overwrite")
 {
     Description = "Overwrite existing files in the output folder (default: skip them).",
@@ -77,6 +83,7 @@ var root =
         debugDirOpt,
         minConfidenceOpt,
         overwriteOpt,
+        ocrLangsOpt,
     };
 
 root.SetAction((parseResult, ct) =>
@@ -92,6 +99,7 @@ root.SetAction((parseResult, ct) =>
         DebugDir      = parseResult.GetValue(debugDirOpt),
         MinConfidence = parseResult.GetValue(minConfidenceOpt),
         Overwrite     = parseResult.GetValue(overwriteOpt),
+        OcrLangs      = parseResult.GetValue(ocrLangsOpt)!,
         OpenAi        = openAiSettings,
     };
 

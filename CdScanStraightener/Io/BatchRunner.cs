@@ -29,6 +29,9 @@ public static class BatchRunner
 
         if(!options.DryRun) options.Output.Create();
 
+        if(!string.Equals(options.OcrLangs, "auto", StringComparison.OrdinalIgnoreCase))
+            OcrUprightResolver.LanguageOverride = options.OcrLangs;
+
         var       results  = new ConcurrentBag<AngleResult>();
         var       failures = new ConcurrentBag<(string File, string Error)>();
         var       done     = 0;

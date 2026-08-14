@@ -32,6 +32,41 @@ public static class OcrUprightResolver
 
     public static bool IsAvailable => Available.Value;
 
+    /// <summary>Tesseract languages ("eng", "eng+spa", …). Null = all installed packs.</summary>
+    public static string? LanguageOverride { get; set; }
+
+    // All installed language packs (minus special ones): label text is often not English,
+    // and OCRing with the right language dramatically improves legibility discrimination.
+    private static readonly Lazy<string> Languages = new(() =>
+    {
+        try
+        {
+            var psi = new ProcessStartInfo("tesseract", "--list-langs")
+            {
+                RedirectStandardOutput = true,
+                RedirectStandardError  = true
+            };
+
+            using var proc = Process.Start(psi);
+
+            if(proc is null) return "eng";
+            var output = proc.StandardOutput.ReadToEnd() + proc.StandardError.ReadToEnd();
+            proc.WaitForExit(5000);
+
+            var langs = output.Split('\n')
+                              .Select(l => l.Trim())
+                              .Where(l => l.Length == 3 && l.All(char.IsAsciiLetterLower))
+                              .Where(l => l != "osd" && l != "equ" && l != "snum")
+                              .ToArray();
+
+            return langs.Length > 0 ? string.Join('+', langs) : "eng";
+        }
+        catch
+        {
+            return "eng";
+        }
+    });
+
     /// <summary>Returns angle or angle+180 (normalized to [0,360)), or null if OCR was inconclusive.</summary>
     public static double? Resolve(Mat gray, Disc disc, double angle, string scratchDir)
     {
@@ -65,7 +100,7 @@ public static class OcrUprightResolver
         {
             Cv2.ImWrite(tmp, crop);
 
-            var psi = new ProcessStartInfo("tesseract", $"\"{tmp}\" stdout --psm 11 -l eng tsv")
+            var psi = new ProcessStartInfo("tesseract", $"\"{tmp}\" stdout --psm 11 -l {LanguageOverride ?? Languages.Value} tsv")
             {
                 RedirectStandardOutput = true,
                 RedirectStandardError  = true,
