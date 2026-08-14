@@ -45,7 +45,7 @@ public static class StraightenPipeline
         }
         else
         {
-            var candidates = AngleEstimator.EstimateCandidates(small, smallDisc);
+            var candidates = AngleEstimator.EstimateCandidates(small, smallDisc, maxCandidates: 5);
             var scratch    = Path.GetTempPath();
             var scored     = new List<(double Angle, double Score)>();
 

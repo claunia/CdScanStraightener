@@ -27,7 +27,7 @@ public static class AngleEstimator
     /// tilted text blocks that out-score the design's true upright, so the caller should pick
     /// among candidates with a stronger signal (e.g. OCR legibility) when one is available.
     /// </summary>
-    public static List<AngleEstimate> EstimateCandidates(Mat gray, Disc disc, int maxCandidates = 3)
+    public static List<AngleEstimate> EstimateCandidates(Mat gray, Disc disc, int maxCandidates = 5)
     {
         using var edges = EdgeMap(gray, disc);
 
@@ -45,7 +45,7 @@ public static class AngleEstimator
                {
                    var d = Math.Abs(p - angle) % 180;
 
-                   return Math.Min(d, 180 - d) < 15;
+                   return Math.Min(d, 180 - d) < 8;
                }))
                 continue;
 
