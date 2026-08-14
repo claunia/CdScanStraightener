@@ -12,6 +12,13 @@ public static class StraightenPipeline
     private const int DetectionMaxSide = 1024;
     private const int OcrMaxSide       = 1536;
 
+    private static double AngularDistance(double a, double b)
+    {
+        var d = Math.Abs(a - b) % 360;
+
+        return Math.Min(d, 360 - d);
+    }
+
     public static AngleResult ProcessFile(string inputPath, string outputPath, Options options)
     {
         using var src = Cv2.ImRead(inputPath, ImreadModes.Color);
@@ -91,8 +98,15 @@ public static class StraightenPipeline
             {
                 angle = ranked[0].Angle;
 
-                // Confidence = how decisively the winning orientation out-reads the runner-up.
-                var second = ranked.Count > 1 ? ranked[1].Score : 0;
+                // Confidence = how decisively the winning orientation out-reads the best
+                // genuinely different orientation (nearby angles read almost as well as the
+                // winner by construction and must not deflate the ratio).
+                var second = ranked.Skip(1)
+                                   .Where(s => AngularDistance(s.Angle, ranked[0].Angle) > 20)
+                                   .Select(s => s.Score)
+                                   .DefaultIfEmpty(0)
+                                   .Max();
+
                 confidence = second > 0 ? ranked[0].Score / second : 10.0;
                 method     = $"projection+ocr+{smallDisc.Method}";
             }
