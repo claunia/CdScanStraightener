@@ -86,6 +86,34 @@ public static class StraightenPipeline
                 confidence = candidates[0].Confidence;
                 method     = $"projection+heuristic+{smallDisc.Method}";
             }
+
+            // When OCR could not separate the orientations, ask a vision model to pick
+            // among the candidate thumbnails (multiple choice — never a free-form angle).
+            if(confidence < options.MinConfidence && options.OpenAi.IsUsable)
+            {
+                using var smallColor = new Mat();
+
+                if(scale < 1.0)
+                    Cv2.Resize(src, smallColor, default, scale, scale, InterpolationFlags.Area);
+                else
+                    src.CopyTo(smallColor);
+
+                var orientations = scored.Count > 0
+                                       ? ranked.Select(s => s.Angle).ToList()
+                                       : candidates.SelectMany(c => new[]
+                                                    {
+                                                        c.Angle, c.Angle + 180
+                                                    })
+                                                   .Select(a => ((a % 360) + 360) % 360)
+                                                   .ToList();
+
+                if(OpenAiOrientationResolver.Resolve(smallColor, smallDisc, orientations, options.OpenAi) is {} pick)
+                {
+                    angle      = pick;
+                    confidence = options.MinConfidence; // the model's choice is applied
+                    method     += "+openai";
+                }
+            }
         }
 
         if(options.DebugDir is {} dbg) WriteDebugArtifacts(dbg, inputPath, small, smallDisc, angle);

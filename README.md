@@ -42,6 +42,28 @@ dotnet run --project CdScanStraightener -- -i /path/to/scans -o /path/to/straigh
 4. **Rotation** — `warpAffine` with Lanczos4 about the **disc center** (not the image center,
    so an off-center disc stays in place), destination size = source size, uncovered corners
    filled with the median corner (scanner background) color.
+4. **Vision-model fallback (optional)** — for images still below `--min-confidence`
+   (labels with text in several directions), a vision LLM can pick the upright orientation.
+   The model is never asked for an angle — it answers a multiple-choice question over
+   thumbnails rendered at the precise candidate angles. Configure in `appsettings.json`
+   (next to the executable or in the working directory; `OpenAI__ApiKey`-style environment
+   variables override):
+
+   ```json
+   {
+     "OpenAI": {
+       "Enabled": true,
+       "BaseUrl": "https://api.openai.com/v1",
+       "ApiKey": "sk-...",
+       "Model": "gpt-4o-mini"
+     }
+   }
+   ```
+
+   Any OpenAI-compatible endpoint works — for LM Studio use
+   `"BaseUrl": "http://localhost:1234/v1"` with a loaded vision model and no ApiKey.
+   The fallback is best-effort: the first failed request (server down, bad key, timeout)
+   disables it for the rest of the run and processing continues without it.
 5. **Metadata** — OpenCV's PNG encoder drops ancillary chunks, so pHYs, iCCP, sRGB, gAMA and
    cHRM are copied verbatim from the source file into the output.
 

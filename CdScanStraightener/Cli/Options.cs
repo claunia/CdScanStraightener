@@ -11,4 +11,5 @@ public sealed record Options
     public          DirectoryInfo? DebugDir      { get; init; }
     public          double         MinConfidence { get; init; } = 1.5;
     public          bool           Overwrite     { get; init; }
+    public          OpenAiSettings OpenAi        { get; init; } = new();
 }

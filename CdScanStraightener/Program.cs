@@ -1,6 +1,20 @@
 using System.CommandLine;
 using CdScanStraightener.Cli;
 using CdScanStraightener.Io;
+using Microsoft.Extensions.Configuration;
+
+// Optional vision-model fallback settings: "OpenAI" section of appsettings.json next to
+// the executable or in the working directory; environment variables (OpenAI__ApiKey, …)
+// override. Works with any OpenAI-compatible endpoint, e.g. LM Studio.
+var configuration = new ConfigurationBuilder().SetBasePath(AppContext.BaseDirectory)
+                                              .AddJsonFile("appsettings.json", optional: true)
+                                              .AddJsonFile(Path.Combine(Environment.CurrentDirectory,
+                                                                        "appsettings.json"),
+                                                           optional: true)
+                                              .AddEnvironmentVariables()
+                                              .Build();
+
+var openAiSettings = configuration.GetSection("OpenAI").Get<OpenAiSettings>() ?? new OpenAiSettings();
 
 var inputOpt = new Option<DirectoryInfo>("--input", "-i")
 {
@@ -78,6 +92,7 @@ root.SetAction((parseResult, ct) =>
         DebugDir      = parseResult.GetValue(debugDirOpt),
         MinConfidence = parseResult.GetValue(minConfidenceOpt),
         Overwrite     = parseResult.GetValue(overwriteOpt),
+        OpenAi        = openAiSettings,
     };
 
     return BatchRunner.RunAsync(options, ct);
