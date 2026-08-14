@@ -17,7 +17,11 @@ public static class OpenAiOrientationResolver
 {
     private const int ThumbnailSide = 384;
 
-    private static readonly HttpClient Http = new() { Timeout = TimeSpan.FromSeconds(120) };
+    private static readonly HttpClient Http = new() { Timeout = TimeSpan.FromSeconds(300) };
+
+    // One request at a time: local inference servers (LM Studio) process sequentially, and
+    // concurrent multi-image requests from every worker just queue until they all time out.
+    private static readonly SemaphoreSlim Gate = new(1, 1);
 
     // The fallback is best-effort: the first failed request (unreachable server, auth error,
     // timeout) disables it for the rest of the run instead of stalling every remaining image.
@@ -32,8 +36,11 @@ public static class OpenAiOrientationResolver
     {
         if (_disabled) return null;
 
+        Gate.Wait();
+
         try
         {
+            if (_disabled) return null;
             var content = new List<object>
             {
                 new
@@ -91,6 +98,10 @@ public static class OpenAiOrientationResolver
             Console.Error.WriteLine(
                 $"OpenAI endpoint unreachable ({ex.Message}); disabling the vision fallback for this run.");
             return null;
+        }
+        finally
+        {
+            Gate.Release();
         }
     }
 

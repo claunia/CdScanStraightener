@@ -129,7 +129,7 @@ public static class StraightenPipeline
                     src.CopyTo(smallColor);
 
                 var orientations = scored.Count > 0
-                                       ? ranked.Select(s => s.Angle).ToList()
+                                       ? ranked.Take(6).Select(s => s.Angle).ToList()
                                        : candidates.SelectMany(c => new[]
                                                     {
                                                         c.Angle, c.Angle + 180
