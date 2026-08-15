@@ -15,6 +15,9 @@ public sealed record OpenAiSettings
     /// <summary>Model used for upright YES/NO verification; defaults to <see cref="Model"/>.</summary>
     public string? VerifyModel { get; init; }
 
+    /// <summary>Maximum simultaneous requests to the endpoint.</summary>
+    public int MaxParallelRequests { get; init; } = 4;
+
     public bool IsUsable => Enabled && (!string.IsNullOrEmpty(ApiKey) ||
                                         !BaseUrl.StartsWith("https://api.openai.com", StringComparison.OrdinalIgnoreCase));
 }

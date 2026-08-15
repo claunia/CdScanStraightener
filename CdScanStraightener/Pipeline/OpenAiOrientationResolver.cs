@@ -19,9 +19,14 @@ public static class OpenAiOrientationResolver
 
     private static readonly HttpClient Http = new() { Timeout = TimeSpan.FromSeconds(300) };
 
-    // One request at a time: local inference servers (LM Studio) process sequentially, and
-    // concurrent multi-image requests from every worker just queue until they all time out.
-    private static readonly SemaphoreSlim Gate = new(1, 1);
+    // Bounded concurrency: flooding a local inference server with a request per worker
+    // makes everything queue until it all times out. The gate is sized on first use from
+    // OpenAiSettings.MaxParallelRequests.
+    private static SemaphoreSlim? _gate;
+
+    private static SemaphoreSlim GateFor(OpenAiSettings settings) =>
+        _gate ??= new SemaphoreSlim(Math.Max(1, settings.MaxParallelRequests),
+                                    Math.Max(1, settings.MaxParallelRequests));
 
     // The fallback is best-effort: the first failed request (unreachable server, auth error,
     // timeout) disables it for the rest of the run instead of stalling every remaining image.
@@ -36,7 +41,9 @@ public static class OpenAiOrientationResolver
     {
         if (_disabled) return null;
 
-        Gate.Wait();
+        var gate = GateFor(settings);
+
+        gate.Wait();
 
         try
         {
@@ -101,7 +108,7 @@ public static class OpenAiOrientationResolver
         }
         finally
         {
-            Gate.Release();
+            gate.Release();
         }
     }
 
@@ -113,7 +120,9 @@ public static class OpenAiOrientationResolver
     {
         if (_disabled) return null;
 
-        Gate.Wait();
+        var gate = GateFor(settings);
+
+        gate.Wait();
 
         try
         {
@@ -172,7 +181,7 @@ public static class OpenAiOrientationResolver
         }
         finally
         {
-            Gate.Release();
+            gate.Release();
         }
     }
 
