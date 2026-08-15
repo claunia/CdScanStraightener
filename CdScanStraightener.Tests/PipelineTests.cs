@@ -82,6 +82,27 @@ public sealed class PipelineTests
     }
 
     [Fact]
+    public void CenterOnWhiteProducesSquareCanvasWithMargin()
+    {
+        using var img   = MakeDisc();
+        using var color = new Mat();
+        Cv2.CvtColor(img, color, ColorConversionCodes.GRAY2BGR);
+        var       disc     = DiscDetector.Detect(img);
+        using var centered = Compositor.CenterOnWhite(color, disc.Center, disc.Radius, 25);
+
+        var expectedSide = 2 * ((int)Math.Ceiling(disc.Radius * 1.01) + 1 + 25);
+        Assert.Equal(expectedSide, centered.Width);
+        Assert.Equal(expectedSide, centered.Height);
+
+        // Corners (outside the disc circle) must be white.
+        Assert.Equal(new Vec3b(255, 255, 255), centered.At<Vec3b>(2, 2));
+        Assert.Equal(new Vec3b(255, 255, 255), centered.At<Vec3b>(centered.Rows - 3, centered.Cols - 3));
+
+        // The disc's own pixels must survive at the canvas center.
+        Assert.NotEqual(new Vec3b(255, 255, 255), centered.At<Vec3b>(centered.Rows / 2, centered.Cols / 4));
+    }
+
+    [Fact]
     public void RotatorPreservesCanvasSize()
     {
         using var img   = MakeDisc();

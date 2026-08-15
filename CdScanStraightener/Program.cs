@@ -65,6 +65,18 @@ var ocrLangsOpt = new Option<string>("--ocr-langs")
     DefaultValueFactory = _ => "auto",
 };
 
+var centerOpt = new Option<bool>("--center")
+{
+    Description = "Center the disc on a white square canvas (disc diameter + safe area per side); " +
+                  "everything outside the disc becomes white. Changes output dimensions.",
+};
+
+var safeAreaOpt = new Option<int>("--safe-area")
+{
+    Description         = "White margin in pixels around the disc when using --center.",
+    DefaultValueFactory = _ => 25,
+};
+
 var overwriteOpt = new Option<bool>("--overwrite")
 {
     Description = "Overwrite existing files in the output folder (default: skip them).",
@@ -84,6 +96,8 @@ var root =
         minConfidenceOpt,
         overwriteOpt,
         ocrLangsOpt,
+        centerOpt,
+        safeAreaOpt,
     };
 
 root.SetAction((parseResult, ct) =>
@@ -100,6 +114,8 @@ root.SetAction((parseResult, ct) =>
         MinConfidence = parseResult.GetValue(minConfidenceOpt),
         Overwrite     = parseResult.GetValue(overwriteOpt),
         OcrLangs      = parseResult.GetValue(ocrLangsOpt)!,
+        Center        = parseResult.GetValue(centerOpt),
+        SafeArea      = parseResult.GetValue(safeAreaOpt),
         OpenAi        = openAiSettings,
     };
 

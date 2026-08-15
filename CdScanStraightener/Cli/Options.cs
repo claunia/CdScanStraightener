@@ -13,4 +13,6 @@ public sealed record Options
     public          bool           Overwrite     { get; init; }
     public          OpenAiSettings OpenAi        { get; init; } = new();
     public          string         OcrLangs      { get; init; } = "auto";
+    public          bool           Center        { get; init; }
+    public          int            SafeArea      { get; init; } = 25;
 }

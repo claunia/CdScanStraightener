@@ -155,7 +155,16 @@ public static class StraightenPipeline
 
         if(!options.DryRun)
         {
-            using var result = applied ? Rotator.Rotate(src, fullDisc.Center, angle) : src.Clone();
+            using var rotated = applied ? Rotator.Rotate(src, fullDisc.Center, angle) : src.Clone();
+
+            // Unresolved files are copied completely untouched — no centering either, so
+            // nothing destructive (the white fill discards background) happens to a file
+            // whose disc geometry we are not confident about.
+            using var result = applied && options.Center
+                                   ? Compositor.CenterOnWhite(rotated, fullDisc.Center, fullDisc.Radius,
+                                                              options.SafeArea)
+                                   : rotated.Clone();
+
             Cv2.ImWrite(outputPath, result);
             PngMetadata.WritePreservedChunks(outputPath, PngMetadata.ReadPreservedChunks(inputPath));
         }

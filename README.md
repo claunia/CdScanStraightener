@@ -49,6 +49,8 @@ A progress bar with ETA is shown on stderr while running; per-file results print
 | `--min-confidence <n>` | Below this confidence the image is copied unrotated with a warning (default `1.5`). |
 | `--overwrite` | Overwrite existing files in the output folder (default: skip them). |
 | `--ocr-langs <langs>` | Tesseract language(s) for orientation OCR, e.g. `eng` or `eng+spa` (default `auto` = all installed packs). |
+| `--center` | Center the disc on a white square canvas (disc diameter + safe area per side); everything outside the disc becomes white. **Changes output dimensions** (DPI is kept, so physical scale is preserved). Files below `--min-confidence` are copied completely untouched — not centered either. |
+| `--safe-area <px>` | White margin around the disc when using `--center` (default `25`). |
 
 ### Recommended workflow for large batches
 
