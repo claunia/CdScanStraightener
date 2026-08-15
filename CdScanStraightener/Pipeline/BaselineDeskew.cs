@@ -21,7 +21,9 @@ public static class BaselineDeskew
         using var bin = new Mat();
         Cv2.AdaptiveThreshold(rotated, bin, 255, AdaptiveThresholdTypes.MeanC, ThresholdTypes.BinaryInv, 31, 12);
 
-        using var mask   = DiscDetector.AnnulusMask(gray.Size(), disc);
+        // Central annulus only: near the rim even straight design elements curve, and
+        // their blobs would vote a spurious tilt.
+        using var mask   = DiscDetector.AnnulusMask(gray.Size(), disc, outerFrac: 0.75);
         using var masked = new Mat();
         bin.CopyTo(masked, mask);
 
@@ -53,7 +55,13 @@ public static class BaselineDeskew
             angles.Add((a, w));
         }
 
-        if(angles.Count < 2) return null;
+        // Quorum and agreement: a couple of blobs, or blobs that disagree, prove nothing.
+        if(angles.Count < 3) return null;
+
+        var ordered = angles.OrderBy(e => e.Angle).ToList();
+        var spread  = ordered[^1].Angle - ordered[0].Angle;
+
+        if(angles.Count < 5 && spread > 2.0) return null;
 
         // Width-weighted median.
         var sorted = angles.OrderBy(e => e.Angle).ToList();
