@@ -11,6 +11,7 @@ public static class StraightenPipeline
 {
     private const int DetectionMaxSide = 1024;
     private const int OcrMaxSide       = 1536;
+    private const int OcrEscalatedSide = 2560;
 
     /// <summary>
     /// Contrast preparation for tesseract: CLAHE equalization, plus polarity inversion for
@@ -146,6 +147,47 @@ public static class StraightenPipeline
             }
 
             var ranked = scored.OrderByDescending(s => s.Score).ToList();
+
+            // Weak evidence usually means small print that is illegible at the standard OCR
+            // size. Escalating resolution costs seconds and often turns an unreadable label
+            // into a decisive one — far cheaper than falling back to a vision model.
+            if(OcrUprightResolver.IsAvailable && (ranked.Count == 0 || ranked[0].Score < 2000))
+            {
+                var escScale = Math.Min(1.0, (double)OcrEscalatedSide / Math.Max(src.Width, src.Height));
+
+                if(escScale > ocrScale)
+                {
+                    using var escGray = new Mat();
+
+                    if(escScale < 1.0)
+                        Cv2.Resize(gray, escGray, default, escScale, escScale, InterpolationFlags.Area);
+                    else
+                        gray.CopyTo(escGray);
+
+                    var escDisc = new Disc(new Point2f((float)(smallDisc.Center.X / scale * escScale),
+                                                       (float)(smallDisc.Center.Y / scale * escScale)),
+                                           (float)(smallDisc.Radius / scale * escScale),
+                                           smallDisc.Method);
+
+                    PreprocessForOcr(escGray, escDisc);
+
+                    var rescored = new List<(double Angle, double Score)>();
+
+                    foreach(var orientation in scored.Select(sc => sc.Angle).Distinct())
+                        rescored.Add((orientation,
+                                      OcrUprightResolver.OcrScore(escGray, escDisc, orientation, scratch) ?? 0));
+
+                    if(rescored.Count > 0 && rescored.Max(r => r.Score) > (ranked.Count > 0 ? ranked[0].Score : 0))
+                    {
+                        if(Environment.GetEnvironmentVariable("CDSCAN_DEBUG") is not null)
+                            Console.Error
+                                   .WriteLine($"  {Path.GetFileName(inputPath)}: escalated OCR {ranked.FirstOrDefault().Score:0} -> {rescored.Max(r => r.Score):0}");
+
+                        scored = rescored;
+                        ranked = scored.OrderByDescending(sc => sc.Score).ToList();
+                    }
+                }
+            }
 
             if(ranked.Count > 0 && ranked[0].Score > 0)
             {
