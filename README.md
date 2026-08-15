@@ -88,7 +88,12 @@ was actually used or suppressed by `--min-confidence`. `method` records which st
    becomes horizontal, OCRed with wraparound handling, and the strongest angular cluster of
    readable words proposes the rotations that bring the arc to the top (or bottom, seal
    style) of the disc — both 180° interpretations become candidates.
-4. **Orientation selection** — with `tesseract` on `PATH`, every candidate is OCRed in both
+4. **Adaptive escalation and stability** — when OCR evidence is weak, scoring is repeated
+   at higher resolution (2560 px, small print often becomes decisive), and indecisive
+   results get a rotation-stability probe: the disc is re-estimated pre-rotated by 37°,
+   and an answer that tracks the rotation proves the estimator follows real label
+   features, upgrading the confidence classically — no model call needed.
+5. **Orientation selection** — with `tesseract` on `PATH`, every candidate is OCRed in both
    180° orientations and the most legible wins. Before OCR the label is CLAHE-equalized
    and, for dark labels, polarity-inverted — tesseract reads dark-on-light far better, and
    silver or black discs with faint printing defeat it entirely without this. All installed language packs are used by
@@ -96,15 +101,15 @@ was actually used or suppressed by `--min-confidence`. `method` records which st
    out-reads the runner-up. Without tesseract, the best projection peak is used with a
    typography heuristic (ink-mass position within text-line bands) for the 180° ambiguity,
    and confidence is the sweep's peak-to-median variance ratio.
-5. **Vision-model fallback (optional)** — labels with text running in several directions
+6. **Vision-model fallback (optional)** — labels with text running in several directions
    (radial text, opposing blocks, arc-set titles) leave OCR unable to separate the
    orientations. For those, a vision LLM can pick: the model is never asked for an angle —
    it answers a multiple-choice question over thumbnails rendered at the precise candidate
    angles. See configuration below.
-6. **Rotation** — `warpAffine` with Lanczos4 about the **disc center** (not the image
+7. **Rotation** — `warpAffine` with Lanczos4 about the **disc center** (not the image
    center, so an off-center disc stays in place), destination size = source size, uncovered
    corners filled with the median scanner-background color sampled from the image corners.
-7. **Metadata** — OpenCV's PNG encoder drops ancillary chunks, so `pHYs` (DPI), `iCCP`
+8. **Metadata** — OpenCV's PNG encoder drops ancillary chunks, so `pHYs` (DPI), `iCCP`
    (ICC profile), `sRGB`, `gAMA` and `cHRM` are copied verbatim from the source file into
    the output via a minimal PNG chunk parser.
 
@@ -141,7 +146,9 @@ Any OpenAI-compatible endpoint works:
   `"http://localhost:1234/v1"`, load a vision model (e.g. `qwen/qwen3-vl-8b`) and set it
   as `Model`; no `ApiKey` needed.
 
-The fallback only runs for images below `--min-confidence`. At most `MaxParallelRequests` requests (default 4) run
+The fallback only runs for images below `--min-confidence`. A connection-level failure
+disables it for the rest of the run; request timeouts are treated as congestion and only
+three consecutive ones disable it. At most `MaxParallelRequests` requests (default 4) run
 concurrently so a local inference server is never flooded by the parallel workers. It is
 best-effort: the first failed request (server down, bad key, timeout) disables it for the
 rest of the run and processing continues without it. Files it decided are tagged `+openai` in the report's
