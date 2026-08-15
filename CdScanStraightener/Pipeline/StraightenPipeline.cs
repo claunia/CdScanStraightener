@@ -215,6 +215,17 @@ public static class StraightenPipeline
                     angle = RefineWithOcr(ocrGray, ocrDisc, angle, scratch);
                     angle = AngleEstimator.RefineAround(small, smallDisc, angle);
 
+                    // Sub-degree finish: measure the residual tilt from the text baselines
+                    // themselves at OCR resolution; the projection polish alone bottoms out
+                    // around ±1° on sparse-text labels.
+                    if(BaselineDeskew.Residual(ocrGray, ocrDisc, angle) is {} residual)
+                    {
+                        if(Environment.GetEnvironmentVariable("CDSCAN_DEBUG") is not null)
+                            Console.Error.WriteLine($"  {Path.GetFileName(inputPath)}: pre-deskew {angle:0.00}° residual {residual:0.00}°");
+
+                        if(Math.Abs(residual) <= 3) angle = ((angle + residual) % 360 + 360) % 360;
+                    }
+
                     // Vision verification: for anything short of overwhelming confidence, show
                     // the corrected label to the model; on NO, walk the next distinct-ranked
                     // orientations until one verifies. Prevents the "completely wrong quadrant"
