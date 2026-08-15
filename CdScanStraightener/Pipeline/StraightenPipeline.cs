@@ -28,25 +28,28 @@ public static class StraightenPipeline
         clahe.Apply(gray, gray);
     }
 
-    /// <summary>OCR-legibility sweep ±8° in 2° steps around an angle; returns the best.</summary>
+    /// <summary>
+    /// OCR-legibility sweep ±8° in 2° steps around an angle. Tesseract tolerates small
+    /// skews, so scores plateau near the optimum; taking the raw argmax random-walks on
+    /// that plateau's noise. Instead the smallest offset whose score is within 5% of the
+    /// maximum wins, so the angle only moves when OCR clearly improves.
+    /// </summary>
     private static double RefineWithOcr(Mat gray, Disc disc, double angle, string scratch)
     {
-        var best      = angle;
-        var bestScore = -1.0;
+        var scores = new Dictionary<int, double>();
 
-        for(var off = -8; off <= 8; off += 2)
-        {
-            var a = ((angle + off) % 360 + 360) % 360;
-            var s = OcrUprightResolver.OcrScore(gray, disc, a, scratch) ?? 0;
+        for(var off = -8; off <= 8; off += 2) scores[off] = OcrUprightResolver.OcrScore(gray, disc, ((angle + off) % 360 + 360) % 360, scratch) ?? 0;
 
-            if(s > bestScore)
-            {
-                bestScore = s;
-                best      = a;
-            }
-        }
+        var max = scores.Values.Max();
 
-        return best;
+        if(max <= 0) return ((angle % 360) + 360) % 360;
+
+        var chosen = scores.Where(kv => kv.Value >= max * 0.95)
+                           .OrderBy(kv => Math.Abs(kv.Key))
+                           .First()
+                           .Key;
+
+        return ((angle + chosen) % 360 + 360) % 360;
     }
 
     private static double AngularDistance(double a, double b)
