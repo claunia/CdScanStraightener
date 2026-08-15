@@ -99,49 +99,70 @@ public static class OcrUprightResolver
         try
         {
             Cv2.ImWrite(tmp, crop);
+            var words = RunTesseractTsv(tmp);
 
-            var psi = new ProcessStartInfo("tesseract", $"\"{tmp}\" stdout --psm 11 -l {LanguageOverride ?? Languages.Value} tsv")
-            {
-                RedirectStandardOutput = true,
-                RedirectStandardError  = true,
-            };
+            if(words is null) return null;
 
-            // We already parallelize per image; tesseract's own OpenMP threads only oversubscribe.
-            psi.Environment["OMP_THREAD_LIMIT"] = "1";
-            using var p = Process.Start(psi);
-
-            if(p is null) return null;
-            var output = p.StandardOutput.ReadToEnd();
-
-            if(!p.WaitForExit(30000))
-            {
-                p.Kill(true);
-
-                return null;
-            }
-
-            if(p.ExitCode != 0) return null;
-
-            // TSV columns: ... conf(10) text(11). Sum confidence of confidently-read words.
-            double score = 0;
-
-            foreach(var line in output.Split('\n').Skip(1))
-            {
-                var cols = line.Split('\t');
-
-                if(cols.Length < 12) continue;
-                if(!double.TryParse(cols[10], NumberStyles.Float, CultureInfo.InvariantCulture, out var conf)) continue;
-                var text = cols[11].Trim();
-
-                if(conf >= 40 && text.Length >= 2 && text.Any(char.IsLetterOrDigit))
-                    score += conf * text.Count(char.IsLetterOrDigit);
-            }
-
-            return score;
+            return words.Sum(w => w.Conf * w.Text.Count(char.IsLetterOrDigit));
         }
         finally
         {
             if(File.Exists(tmp)) File.Delete(tmp);
         }
+    }
+
+    public sealed record OcrWord(double Conf, string Text, int X, int Y, int W, int H);
+
+    /// <summary>
+    /// Runs tesseract on an image file and returns the confidently-read words with their
+    /// bounding boxes, or null if tesseract failed. Only words with conf ≥ 40, at least two
+    /// characters and some letter/digit content are returned.
+    /// </summary>
+    public static List<OcrWord>? RunTesseractTsv(string imagePath)
+    {
+        var psi = new ProcessStartInfo("tesseract",
+                                       $"\"{imagePath}\" stdout --psm 11 -l {LanguageOverride ?? Languages.Value} tsv")
+        {
+            RedirectStandardOutput = true,
+            RedirectStandardError  = true,
+        };
+
+        // We already parallelize per image; tesseract's own OpenMP threads only oversubscribe.
+        psi.Environment["OMP_THREAD_LIMIT"] = "1";
+        using var p = Process.Start(psi);
+
+        if(p is null) return null;
+        var output = p.StandardOutput.ReadToEnd();
+
+        if(!p.WaitForExit(30000))
+        {
+            p.Kill(true);
+
+            return null;
+        }
+
+        if(p.ExitCode != 0) return null;
+
+        // TSV columns: ... left(6) top(7) width(8) height(9) conf(10) text(11).
+        var words = new List<OcrWord>();
+
+        foreach(var line in output.Split('\n').Skip(1))
+        {
+            var cols = line.Split('\t');
+
+            if(cols.Length < 12) continue;
+            if(!double.TryParse(cols[10], NumberStyles.Float, CultureInfo.InvariantCulture, out var conf)) continue;
+            var text = cols[11].Trim();
+
+            if(conf < 40 || text.Length < 2 || !text.Any(char.IsLetterOrDigit)) continue;
+
+            if(int.TryParse(cols[6], out var x) &&
+               int.TryParse(cols[7], out var y) &&
+               int.TryParse(cols[8], out var w) &&
+               int.TryParse(cols[9], out var h))
+                words.Add(new OcrWord(conf, text, x, y, w, h));
+        }
+
+        return words;
     }
 }
