@@ -139,7 +139,7 @@ public static class OpenAiOrientationResolver
             {
                 Content = new StringContent(JsonSerializer.Serialize(new
                 {
-                    model = settings.Model,
+                    model = settings.VerifyModel ?? settings.Model,
                     messages = new[] { new { role = "user", content } },
                 }), Encoding.UTF8, "application/json"),
             };

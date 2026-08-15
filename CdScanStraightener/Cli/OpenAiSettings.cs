@@ -12,6 +12,9 @@ public sealed record OpenAiSettings
     public string? ApiKey { get; init; }
     public string Model { get; init; } = "gpt-4o-mini";
 
+    /// <summary>Model used for upright YES/NO verification; defaults to <see cref="Model"/>.</summary>
+    public string? VerifyModel { get; init; }
+
     public bool IsUsable => Enabled && (!string.IsNullOrEmpty(ApiKey) ||
                                         !BaseUrl.StartsWith("https://api.openai.com", StringComparison.OrdinalIgnoreCase));
 }
