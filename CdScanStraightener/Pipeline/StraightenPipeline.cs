@@ -216,7 +216,11 @@ public static class StraightenPipeline
                     // degrees), so re-center on the OCR-legibility maximum ±8°, then fine
                     // projection polish. This removes the residual "almost straight" tilts.
                     angle = RefineWithOcr(ocrGray, ocrDisc, angle, scratch);
-                    angle = AngleEstimator.RefineAround(small, smallDisc, angle);
+
+                    // Precision polish at OCR resolution: the winning coarse peak can sit
+                    // several degrees off (2° grid, low-res scoring), so sweep a ±6° window
+                    // down to 0.1° steps on the high-resolution image.
+                    angle = AngleEstimator.RefineAround(ocrGray, ocrDisc, angle, window: 6.0, step: 0.5);
 
                     // Sub-degree finish: measure the residual tilt from the text baselines
                     // themselves at OCR resolution; the projection polish alone bottoms out

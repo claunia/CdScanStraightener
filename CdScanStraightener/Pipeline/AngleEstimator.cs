@@ -30,17 +30,23 @@ public static class AngleEstimator
     {
         using var edges = EdgeMap(gray, disc);
 
-        var best      = angle;
-        var bestScore = double.MinValue;
+        var best = angle;
 
-        for(var a = angle - window; a <= angle + window; a += step)
+        // Coarse-to-fine within the window, ending at 0.1° resolution.
+        foreach(var (w, st) in new[] { (window, step), (step * 2, 0.1) })
         {
-            var s = Score(edges, disc, ((a % 360) + 360) % 360);
+            var bestScore = double.MinValue;
+            var center    = best;
 
-            if(s > bestScore)
+            for(var a = center - w; a <= center + w; a += st)
             {
-                bestScore = s;
-                best      = a;
+                var s = Score(edges, disc, ((a % 360) + 360) % 360);
+
+                if(s > bestScore)
+                {
+                    bestScore = s;
+                    best      = a;
+                }
             }
         }
 
