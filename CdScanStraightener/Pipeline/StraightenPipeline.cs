@@ -108,6 +108,17 @@ public static class StraightenPipeline
 
                         scored.Add((((orientation % 360) + 360) % 360, score));
                     }
+
+                // Circumferential text is invisible to the projection sweep and unreadable
+                // by whole-disc OCR; the polar-unwrap estimator proposes and scores it.
+                foreach(var arc in ArcTextEstimator.Candidates(ocrGray, ocrDisc, scratch))
+                {
+                    if(Environment.GetEnvironmentVariable("CDSCAN_DEBUG") is not null)
+                        Console.Error
+                               .WriteLine($"  {Path.GetFileName(inputPath)}: arc candidate {arc.Angle:0.00}° score={arc.Score:0}");
+
+                    scored.Add((arc.Angle, arc.Score));
+                }
             }
 
             var ranked = scored.OrderByDescending(s => s.Score).ToList();
