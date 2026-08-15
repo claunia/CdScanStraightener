@@ -28,9 +28,11 @@ public static class OpenAiOrientationResolver
         _gate ??= new SemaphoreSlim(Math.Max(1, settings.MaxParallelRequests),
                                     Math.Max(1, settings.MaxParallelRequests));
 
-    // The fallback is best-effort: the first failed request (unreachable server, auth error,
-    // timeout) disables it for the rest of the run instead of stalling every remaining image.
+    // The fallback is best-effort: a connection-level failure (unreachable server, auth
+    // error) disables it for the rest of the run. Timeouts are congestion, not a dead
+    // server — only three consecutive ones disable.
     private static volatile bool _disabled;
+    private static int           _consecutiveTimeouts;
 
     /// <summary>
     /// Asks the model which of the candidate orientations (degrees CCW) shows the label
@@ -91,12 +93,29 @@ public static class OpenAiOrientationResolver
                 return null;
             }
 
+            Interlocked.Exchange(ref _consecutiveTimeouts, 0);
+
             using var json = JsonDocument.Parse(body);
             var reply = json.RootElement.GetProperty("choices")[0]
                 .GetProperty("message").GetProperty("content").GetString() ?? "";
             var match = System.Text.RegularExpressions.Regex.Match(reply, @"\d+");
             if (match.Success && int.TryParse(match.Value, out var index) && index < angles.Count)
                 return angles[index];
+            return null;
+        }
+        catch (TaskCanceledException)
+        {
+            if (Interlocked.Increment(ref _consecutiveTimeouts) >= 3)
+            {
+                _disabled = true;
+                Console.Error.WriteLine(
+                    "OpenAI endpoint timed out three times in a row; disabling the vision fallback for this run.");
+            }
+            else
+            {
+                Console.Error.WriteLine("OpenAI request timed out; continuing without a verdict for this image.");
+            }
+
             return null;
         }
         catch (Exception ex)
@@ -165,11 +184,28 @@ public static class OpenAiOrientationResolver
                 return null;
             }
 
+            Interlocked.Exchange(ref _consecutiveTimeouts, 0);
+
             using var json = JsonDocument.Parse(body);
             var reply = (json.RootElement.GetProperty("choices")[0]
                 .GetProperty("message").GetProperty("content").GetString() ?? "").ToUpperInvariant();
             if (reply.Contains("YES")) return true;
             if (reply.Contains("NO")) return false;
+            return null;
+        }
+        catch (TaskCanceledException)
+        {
+            if (Interlocked.Increment(ref _consecutiveTimeouts) >= 3)
+            {
+                _disabled = true;
+                Console.Error.WriteLine(
+                    "OpenAI endpoint timed out three times in a row; disabling the vision fallback for this run.");
+            }
+            else
+            {
+                Console.Error.WriteLine("OpenAI request timed out; continuing without a verdict for this image.");
+            }
+
             return null;
         }
         catch (Exception ex)
