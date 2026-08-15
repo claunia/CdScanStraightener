@@ -12,6 +12,22 @@ public static class StraightenPipeline
     private const int DetectionMaxSide = 1024;
     private const int OcrMaxSide       = 1536;
 
+    /// <summary>
+    /// Contrast preparation for tesseract: CLAHE equalization, plus polarity inversion for
+    /// dark labels — tesseract reads dark-on-light far better than light-on-dark, and
+    /// silver/black discs with faint printing defeat it entirely without this.
+    /// </summary>
+    private static void PreprocessForOcr(Mat gray, Disc disc)
+    {
+        using var mask = DiscDetector.AnnulusMask(gray.Size(), disc);
+        var       mean = Cv2.Mean(gray, mask).Val0;
+
+        if(mean < 128) Cv2.BitwiseNot(gray, gray);
+
+        using var clahe = Cv2.CreateCLAHE(2.0, new Size(8, 8));
+        clahe.Apply(gray, gray);
+    }
+
     private static double AngularDistance(double a, double b)
     {
         var d = Math.Abs(a - b) % 360;
@@ -71,6 +87,8 @@ public static class StraightenPipeline
                                                (float)(smallDisc.Center.Y / scale * ocrScale)),
                                    (float)(smallDisc.Radius / scale * ocrScale),
                                    smallDisc.Method);
+
+            PreprocessForOcr(ocrGray, ocrDisc);
 
             if(OcrUprightResolver.IsAvailable)
             {
