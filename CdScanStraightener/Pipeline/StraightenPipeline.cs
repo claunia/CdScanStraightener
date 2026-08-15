@@ -28,6 +28,27 @@ public static class StraightenPipeline
         clahe.Apply(gray, gray);
     }
 
+    /// <summary>OCR-legibility sweep ±8° in 2° steps around an angle; returns the best.</summary>
+    private static double RefineWithOcr(Mat gray, Disc disc, double angle, string scratch)
+    {
+        var best      = angle;
+        var bestScore = -1.0;
+
+        for(var off = -8; off <= 8; off += 2)
+        {
+            var a = ((angle + off) % 360 + 360) % 360;
+            var s = OcrUprightResolver.OcrScore(gray, disc, a, scratch) ?? 0;
+
+            if(s > bestScore)
+            {
+                bestScore = s;
+                best      = a;
+            }
+        }
+
+        return best;
+    }
+
     private static double AngularDistance(double a, double b)
     {
         var d = Math.Abs(a - b) % 360;
@@ -172,6 +193,16 @@ public static class StraightenPipeline
                     confidence = options.MinConfidence; // the model's choice is applied
                     method     += "+openai";
                 }
+            }
+
+            if(confidence >= options.MinConfidence)
+            {
+                // Final polish: candidate angles inherit the precision of whichever
+                // estimator proposed them (the implicit 0° and arc candidates only a few
+                // degrees), so re-center on the OCR-legibility maximum ±8°, then fine
+                // projection polish. This removes the residual "almost straight" tilts.
+                angle = RefineWithOcr(ocrGray, ocrDisc, angle, scratch);
+                angle = AngleEstimator.RefineAround(small, smallDisc, angle);
             }
         }
 

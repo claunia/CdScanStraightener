@@ -22,6 +22,32 @@ public static class AngleEstimator
     public static AngleEstimate Estimate(Mat gray, Disc disc) => EstimateCandidates(gray, disc)[0];
 
     /// <summary>
+    /// Fine projection polish around an already-chosen angle: sweeps ±<paramref name="window"/>°
+    /// at <paramref name="step"/>° and returns the best-scoring angle, preserving the chosen
+    /// 180° orientation. Used as the last stage regardless of which estimator chose the angle.
+    /// </summary>
+    public static double RefineAround(Mat gray, Disc disc, double angle, double window = 2.0, double step = FineStep)
+    {
+        using var edges = EdgeMap(gray, disc);
+
+        var best      = angle;
+        var bestScore = double.MinValue;
+
+        for(var a = angle - window; a <= angle + window; a += step)
+        {
+            var s = Score(edges, disc, ((a % 360) + 360) % 360);
+
+            if(s > bestScore)
+            {
+                bestScore = s;
+                best      = a;
+            }
+        }
+
+        return ((best % 360) + 360) % 360;
+    }
+
+    /// <summary>
     /// Returns up to <paramref name="maxCandidates"/> local maxima of the sweep (best first,
     /// pairwise ≥ 8° apart mod 180), each fine-refined. Labels often contain deliberately
     /// tilted text blocks that out-score the design's true upright, so the caller should pick
