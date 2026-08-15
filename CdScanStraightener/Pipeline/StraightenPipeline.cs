@@ -53,6 +53,40 @@ public static class StraightenPipeline
         return ((angle + chosen) % 360 + 360) % 360;
     }
 
+    /// <summary>
+    /// Second-opinion orientation estimate on a pre-rotated copy of the working images.
+    /// Used for the rotation-stability confidence check: if the estimate tracks a known
+    /// synthetic rotation, the estimator is locked onto real label features.
+    /// </summary>
+    private static double? BestOrientation(Mat small, Disc smallDisc, Mat ocrGray, Disc ocrDisc, string scratch)
+    {
+        var candidates = AngleEstimator.EstimateCandidates(small, smallDisc, maxCandidates: 5);
+        var scored     = new List<(double Angle, double Score)>();
+
+        foreach(var candidate in candidates)
+            foreach(var orientation in new[]
+                    {
+                        candidate.Angle, candidate.Angle + 180
+                    })
+                scored.Add((((orientation % 360) + 360) % 360,
+                            OcrUprightResolver.OcrScore(ocrGray, ocrDisc, orientation, scratch) ?? 0));
+
+        foreach(var arc in ArcTextEstimator.Candidates(ocrGray, ocrDisc, scratch)) scored.Add((arc.Angle, arc.Score));
+
+        var best = scored.OrderByDescending(sc => sc.Score).FirstOrDefault();
+
+        return best.Score > 0 ? best.Angle : null;
+    }
+
+    private static Mat Rotated(Mat src, Point2f center, double angle)
+    {
+        using var m   = Cv2.GetRotationMatrix2D(center, angle, 1.0);
+        var       dst = new Mat();
+        Cv2.WarpAffine(src, dst, m, src.Size(), InterpolationFlags.Linear, BorderTypes.Constant, Scalar.Black);
+
+        return dst;
+    }
+
     private static double AngularDistance(double a, double b)
     {
         var d = Math.Abs(a - b) % 360;
@@ -227,6 +261,35 @@ public static class StraightenPipeline
                     src.CopyTo(smallColor);
 
                 return smallColor;
+            }
+
+            // Rotation-stability confidence: when the score ratio is indecisive
+            // (multi-directional designs read a little text at several orientations), a
+            // decisive classical signal remains — re-estimate on the same disc rotated by
+            // 37°. If the answer tracks the rotation, the estimator follows real label
+            // features, not noise, and the result is trustworthy.
+            if(confidence < options.MinConfidence && ranked.Count > 0 && ranked[0].Score > 0 &&
+               OcrUprightResolver.IsAvailable)
+            {
+                const double probe = 37.0;
+
+                using var smallR = Rotated(small, smallDisc.Center, probe);
+                using var ocrR   = Rotated(ocrGray, ocrDisc.Center, probe);
+
+                if(BestOrientation(smallR, smallDisc, ocrR, ocrDisc, scratch) is {} second)
+                {
+                    var tracked = AngularDistance(second, angle - probe) <= 3.0;
+
+                    if(Environment.GetEnvironmentVariable("CDSCAN_DEBUG") is not null)
+                        Console.Error
+                               .WriteLine($"  {Path.GetFileName(inputPath)}: stability probe {second:0.00}° vs expected {((angle - probe) % 360 + 360) % 360:0.00}° -> {(tracked ? "stable" : "unstable")}");
+
+                    if(tracked)
+                    {
+                        confidence = Math.Max(confidence, options.MinConfidence);
+                        method     += "+stable";
+                    }
+                }
             }
 
             try
