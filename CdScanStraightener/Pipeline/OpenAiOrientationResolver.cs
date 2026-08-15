@@ -15,7 +15,7 @@ namespace CdScanStraightener.Pipeline;
 /// </summary>
 public static class OpenAiOrientationResolver
 {
-    private const int ThumbnailSide = 384;
+    private const int ThumbnailSide = 512;
 
     private static readonly HttpClient Http = new() { Timeout = TimeSpan.FromSeconds(300) };
 
@@ -90,6 +90,77 @@ public static class OpenAiOrientationResolver
             var match = System.Text.RegularExpressions.Regex.Match(reply, @"\d+");
             if (match.Success && int.TryParse(match.Value, out var index) && index < angles.Count)
                 return angles[index];
+            return null;
+        }
+        catch (Exception ex)
+        {
+            _disabled = true;
+            Console.Error.WriteLine(
+                $"OpenAI endpoint unreachable ({ex.Message}); disabling the vision fallback for this run.");
+            return null;
+        }
+        finally
+        {
+            Gate.Release();
+        }
+    }
+
+    /// <summary>
+    /// Asks the model whether the label reads upright at the given angle. Returns true/false,
+    /// or null when the endpoint is unavailable or the answer was unparseable.
+    /// </summary>
+    public static bool? VerifyUpright(Mat color, Disc disc, double angle, OpenAiSettings settings)
+    {
+        if (_disabled) return null;
+
+        Gate.Wait();
+
+        try
+        {
+            if (_disabled) return null;
+
+            var content = new List<object>
+            {
+                new
+                {
+                    type = "text",
+                    text = "Look at this scanned CD label. Is the main printed text upright — readable " +
+                           "left-to-right, not upside down, not sideways? Answer with ONLY the word YES or NO.",
+                },
+                new
+                {
+                    type = "image_url",
+                    image_url = new { url = $"data:image/jpeg;base64,{Thumbnail(color, disc, angle)}" },
+                },
+            };
+
+            var request = new HttpRequestMessage(
+                HttpMethod.Post, $"{settings.BaseUrl.TrimEnd('/')}/chat/completions")
+            {
+                Content = new StringContent(JsonSerializer.Serialize(new
+                {
+                    model = settings.Model,
+                    messages = new[] { new { role = "user", content } },
+                }), Encoding.UTF8, "application/json"),
+            };
+            if (!string.IsNullOrEmpty(settings.ApiKey))
+                request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", settings.ApiKey);
+
+            using var response = Http.Send(request);
+            var body = response.Content.ReadAsStringAsync().GetAwaiter().GetResult();
+            if (!response.IsSuccessStatusCode)
+            {
+                _disabled = true;
+                Console.Error.WriteLine(
+                    $"OpenAI endpoint returned {(int)response.StatusCode} ({Truncate(body)}); disabling the vision fallback for this run.");
+                return null;
+            }
+
+            using var json = JsonDocument.Parse(body);
+            var reply = (json.RootElement.GetProperty("choices")[0]
+                .GetProperty("message").GetProperty("content").GetString() ?? "").ToUpperInvariant();
+            if (reply.Contains("YES")) return true;
+            if (reply.Contains("NO")) return false;
             return null;
         }
         catch (Exception ex)

@@ -77,6 +77,13 @@ var safeAreaOpt = new Option<int>("--safe-area")
     DefaultValueFactory = _ => 25,
 };
 
+var verifyBelowOpt = new Option<double>("--verify-below")
+{
+    Description         = "Vision-verify results whose confidence is below this value; use a large number " +
+                          "to verify every image (slow but thorough).",
+    DefaultValueFactory = _ => 3.0,
+};
+
 var overwriteOpt = new Option<bool>("--overwrite")
 {
     Description = "Overwrite existing files in the output folder (default: skip them).",
@@ -98,6 +105,7 @@ var root =
         ocrLangsOpt,
         centerOpt,
         safeAreaOpt,
+        verifyBelowOpt,
     };
 
 root.SetAction((parseResult, ct) =>
@@ -116,6 +124,7 @@ root.SetAction((parseResult, ct) =>
         OcrLangs      = parseResult.GetValue(ocrLangsOpt)!,
         Center        = parseResult.GetValue(centerOpt),
         SafeArea      = parseResult.GetValue(safeAreaOpt),
+        VerifyBelow   = parseResult.GetValue(verifyBelowOpt),
         OpenAi        = openAiSettings,
     };
 

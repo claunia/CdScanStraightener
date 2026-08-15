@@ -169,40 +169,94 @@ public static class StraightenPipeline
 
             // When OCR could not separate the orientations, ask a vision model to pick
             // among the candidate thumbnails (multiple choice — never a free-form angle).
-            if(confidence < options.MinConfidence && options.OpenAi.IsUsable)
+            Mat? smallColor = null;
+
+            Mat SmallColor()
             {
-                using var smallColor = new Mat();
+                if(smallColor is not null) return smallColor;
+                smallColor = new Mat();
 
                 if(scale < 1.0)
                     Cv2.Resize(src, smallColor, default, scale, scale, InterpolationFlags.Area);
                 else
                     src.CopyTo(smallColor);
 
-                var orientations = scored.Count > 0
-                                       ? ranked.Take(6).Select(s => s.Angle).ToList()
-                                       : candidates.SelectMany(c => new[]
-                                                    {
-                                                        c.Angle, c.Angle + 180
-                                                    })
-                                                   .Select(a => ((a % 360) + 360) % 360)
-                                                   .ToList();
-
-                if(OpenAiOrientationResolver.Resolve(smallColor, smallDisc, orientations, options.OpenAi) is {} pick)
-                {
-                    angle      = pick;
-                    confidence = options.MinConfidence; // the model's choice is applied
-                    method     += "+openai";
-                }
+                return smallColor;
             }
 
-            if(confidence >= options.MinConfidence)
+            try
             {
-                // Final polish: candidate angles inherit the precision of whichever
-                // estimator proposed them (the implicit 0° and arc candidates only a few
-                // degrees), so re-center on the OCR-legibility maximum ±8°, then fine
-                // projection polish. This removes the residual "almost straight" tilts.
-                angle = RefineWithOcr(ocrGray, ocrDisc, angle, scratch);
-                angle = AngleEstimator.RefineAround(small, smallDisc, angle);
+                if(confidence < options.MinConfidence && options.OpenAi.IsUsable)
+                {
+                    var orientations = scored.Count > 0
+                                           ? ranked.Take(6).Select(s => s.Angle).ToList()
+                                           : candidates.SelectMany(c => new[]
+                                                        {
+                                                            c.Angle, c.Angle + 180
+                                                        })
+                                                       .Select(a => ((a % 360) + 360) % 360)
+                                                       .ToList();
+
+                    if(OpenAiOrientationResolver.Resolve(SmallColor(), smallDisc, orientations, options.OpenAi) is {}
+                       pick)
+                    {
+                        angle      = pick;
+                        confidence = options.MinConfidence; // the model's choice is applied
+                        method     += "+openai";
+                    }
+                }
+
+                if(confidence >= options.MinConfidence)
+                {
+                    // Final polish: candidate angles inherit the precision of whichever
+                    // estimator proposed them (the implicit 0° and arc candidates only a few
+                    // degrees), so re-center on the OCR-legibility maximum ±8°, then fine
+                    // projection polish. This removes the residual "almost straight" tilts.
+                    angle = RefineWithOcr(ocrGray, ocrDisc, angle, scratch);
+                    angle = AngleEstimator.RefineAround(small, smallDisc, angle);
+
+                    // Vision verification: for anything short of overwhelming confidence, show
+                    // the corrected label to the model; on NO, walk the next distinct-ranked
+                    // orientations until one verifies. Prevents the "completely wrong quadrant"
+                    // failures a wrong OCR/arc winner produces.
+                    if(confidence < options.VerifyBelow && options.OpenAi.IsUsable)
+                    {
+                        var verdict = OpenAiOrientationResolver.VerifyUpright(SmallColor(), smallDisc, angle,
+                                                                              options.OpenAi);
+
+                        if(verdict is false)
+                        {
+                            var accepted = false;
+
+                            foreach(var alt in ranked.Where(r => r.Score > 0 &&
+                                                                 AngularDistance(r.Angle, angle) > 20)
+                                                     .Select(r => r.Angle)
+                                                     .Take(3))
+                            {
+                                var a2 = RefineWithOcr(ocrGray, ocrDisc, alt, scratch);
+                                a2 = AngleEstimator.RefineAround(small, smallDisc, a2);
+
+                                if(OpenAiOrientationResolver.VerifyUpright(SmallColor(), smallDisc, a2,
+                                                                           options.OpenAi) is not true)
+                                    continue;
+
+                                angle    = a2;
+                                method   += "+veto";
+                                accepted = true;
+
+                                break;
+                            }
+
+                            // Nothing verified: better to leave the scan untouched than to
+                            // apply a rotation the model rejects.
+                            if(!accepted) confidence = 0;
+                        }
+                    }
+                }
+            }
+            finally
+            {
+                smallColor?.Dispose();
             }
         }
 

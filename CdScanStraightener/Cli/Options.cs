@@ -15,4 +15,5 @@ public sealed record Options
     public          string         OcrLangs      { get; init; } = "auto";
     public          bool           Center        { get; init; }
     public          int            SafeArea      { get; init; } = 25;
+    public          double         VerifyBelow   { get; init; } = 3.0;
 }
