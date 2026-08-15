@@ -48,6 +48,7 @@ A progress bar with ETA is shown on stderr while running; per-file results print
 | `--debug-dir <dir>` | Write annotated intermediates: detected disc/hub overlay with an "up" arrow, and a polar unwrap of the label. |
 | `--min-confidence <n>` | Below this confidence the image is copied unrotated with a warning (default `1.5`). |
 | `--overwrite` | Overwrite existing files in the output folder (default: skip them). |
+| `--verify-below <n>` | Vision-verify results whose confidence is below this value (default `3.0`); pass a large number to verify every image — slow but thorough. |
 | `--ocr-langs <langs>` | Tesseract language(s) for orientation OCR, e.g. `eng` or `eng+spa` (default `auto` = all installed packs). |
 | `--center` | Center the disc on a white square canvas (disc diameter + safe area per side); everything outside the disc becomes white. **Changes output dimensions** (DPI is kept, so physical scale is preserved). Files below `--min-confidence` are copied completely untouched — not centered either. |
 | `--safe-area <px>` | White margin around the disc when using `--center` (default `25`). |
@@ -82,21 +83,28 @@ was actually used or suppressed by `--min-confidence`. `method` records which st
    The top sweep peaks (≥ 8° apart) are kept as candidates, **plus 0°** — carefully placed
    scans are common, and artwork with deliberately tilted text blocks can out-score the
    design's true upright.
-3. **Orientation selection** — with `tesseract` on `PATH`, every candidate is OCRed in both
-   180° orientations and the most legible wins. All installed language packs are used by
+3. **Arc-text estimation** — circumferential (rim/arc-set) text is invisible to the
+   projection sweep, so the label annulus is polar-unwrapped into a strip where arc text
+   becomes horizontal, OCRed with wraparound handling, and the strongest angular cluster of
+   readable words proposes the rotations that bring the arc to the top (or bottom, seal
+   style) of the disc — both 180° interpretations become candidates.
+4. **Orientation selection** — with `tesseract` on `PATH`, every candidate is OCRed in both
+   180° orientations and the most legible wins. Before OCR the label is CLAHE-equalized
+   and, for dark labels, polarity-inverted — tesseract reads dark-on-light far better, and
+   silver or black discs with faint printing defeat it entirely without this. All installed language packs are used by
    default (`--ocr-langs` overrides) — install the packs matching your discs' languages. Confidence is how decisively the winner
    out-reads the runner-up. Without tesseract, the best projection peak is used with a
    typography heuristic (ink-mass position within text-line bands) for the 180° ambiguity,
    and confidence is the sweep's peak-to-median variance ratio.
-4. **Vision-model fallback (optional)** — labels with text running in several directions
+5. **Vision-model fallback (optional)** — labels with text running in several directions
    (radial text, opposing blocks, arc-set titles) leave OCR unable to separate the
    orientations. For those, a vision LLM can pick: the model is never asked for an angle —
    it answers a multiple-choice question over thumbnails rendered at the precise candidate
    angles. See configuration below.
-5. **Rotation** — `warpAffine` with Lanczos4 about the **disc center** (not the image
+6. **Rotation** — `warpAffine` with Lanczos4 about the **disc center** (not the image
    center, so an off-center disc stays in place), destination size = source size, uncovered
    corners filled with the median scanner-background color sampled from the image corners.
-6. **Metadata** — OpenCV's PNG encoder drops ancillary chunks, so `pHYs` (DPI), `iCCP`
+7. **Metadata** — OpenCV's PNG encoder drops ancillary chunks, so `pHYs` (DPI), `iCCP`
    (ICC profile), `sRGB`, `gAMA` and `cHRM` are copied verbatim from the source file into
    the output via a minimal PNG chunk parser.
 
@@ -115,10 +123,16 @@ executable and in the working directory; environment variables in configuration 
     "Enabled": true,
     "BaseUrl": "https://api.openai.com/v1",
     "ApiKey": "sk-...",
-    "Model": "gpt-4o-mini"
+    "Model": "gpt-4o-mini",
+    "VerifyModel": null,
+    "MaxParallelRequests": 4
   }
 }
 ```
+
+`VerifyModel` optionally names a different (typically stronger) model for the YES/NO
+upright verification pass, while `Model` keeps handling the multiple-choice selection;
+when null, `Model` is used for both.
 
 Any OpenAI-compatible endpoint works:
 
@@ -127,8 +141,8 @@ Any OpenAI-compatible endpoint works:
   `"http://localhost:1234/v1"`, load a vision model (e.g. `qwen/qwen3-vl-8b`) and set it
   as `Model`; no `ApiKey` needed.
 
-The fallback only runs for images below `--min-confidence`. Requests are serialized (one
-at a time) so a local inference server is never flooded by the parallel workers. It is
+The fallback only runs for images below `--min-confidence`. At most `MaxParallelRequests` requests (default 4) run
+concurrently so a local inference server is never flooded by the parallel workers. It is
 best-effort: the first failed request (server down, bad key, timeout) disables it for the
 rest of the run and processing continues without it. Files it decided are tagged `+openai` in the report's
 `method` column for auditing.
