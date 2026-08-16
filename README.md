@@ -1,5 +1,24 @@
 # CdScanStraightener
 
+Two command-line tools for cleaning up optical-media scans:
+
+- **CdScanStraightener** — straightens scanned CD/DVD **discs** (rotation only, described below).
+- **CdInlayStraightener** — straightens scanned **inlays/booklets**: detects the rectangle on a
+  light or dark scanner background, deskews it, fixes 90°/180° orientation via OCR (losslessly,
+  quarter turns never resample), and crops so **no background pixels remain** (inscribed crop
+  with a checked border postcondition; `--trim` sets the inward margin, default 2 px). Output
+  dimensions change; DPI and ICC metadata are preserved. Usage mirrors the disc tool:
+
+  ```sh
+  dotnet run --project CdInlayStraightener -- -i scans/ -o straightened/ [--trim 2] [--report r.csv]
+  ```
+
+  Extra options: `--force-orientation <0|90|180|270>`, `--min-confidence` (below it the inlay is
+  kept deskewed but not turned), `--ocr-langs`, `--dry-run`, `--overwrite`. Undetectable scans
+  are copied untouched and flagged. No AI is involved anywhere in this tool.
+
+## CdScanStraightener (discs)
+
 A command-line tool that automatically straightens scanned CD/DVD images.
 
 Given a folder of PNG scans of discs, it detects each disc and the rotation that makes the
