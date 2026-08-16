@@ -1,3 +1,4 @@
+using CdScanStraightener.Common;
 using OpenCvSharp;
 
 namespace CdScanStraightener.Pipeline;
@@ -93,7 +94,7 @@ public static class ArcTextEstimator
         Cv2.HConcat([strip, strip], doubled);
 
         var tmp = Path.Combine(scratchDir, $"arc-{Guid.NewGuid():N}.png");
-        List<OcrUprightResolver.OcrWord>? words;
+        List<OcrWord>? words;
 
         try
         {
@@ -102,7 +103,7 @@ public static class ArcTextEstimator
             if(Environment.GetEnvironmentVariable("CDSCAN_ARC_DUMP") is { } dumpDir)
                 Cv2.ImWrite(Path.Combine(dumpDir, $"strip-{(bottom ? "bottom" : "top")}.png"), doubled);
 
-            words = OcrUprightResolver.RunTesseractTsv(tmp);
+            words = TesseractOcr.RunTsv(tmp);
         }
         finally
         {

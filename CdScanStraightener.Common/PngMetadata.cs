@@ -1,6 +1,6 @@
 using System.Buffers.Binary;
 
-namespace CdScanStraightener.Io;
+namespace CdScanStraightener.Common;
 
 /// <summary>
 /// Minimal PNG chunk handling to carry ancillary metadata — pHYs (DPI), iCCP (ICC profile),

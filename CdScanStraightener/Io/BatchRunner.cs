@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Globalization;
 using CdScanStraightener.Cli;
+using CdScanStraightener.Common;
 using CdScanStraightener.Pipeline;
 
 namespace CdScanStraightener.Io;
@@ -30,7 +31,7 @@ public static class BatchRunner
         if(!options.DryRun) options.Output.Create();
 
         if(!string.Equals(options.OcrLangs, "auto", StringComparison.OrdinalIgnoreCase))
-            OcrUprightResolver.LanguageOverride = options.OcrLangs;
+            TesseractOcr.LanguageOverride = options.OcrLangs;
 
         var       results  = new ConcurrentBag<AngleResult>();
         var       failures = new ConcurrentBag<(string File, string Error)>();

@@ -1,5 +1,5 @@
 using System.Buffers.Binary;
-using CdScanStraightener.Io;
+using CdScanStraightener.Common;
 using OpenCvSharp;
 
 namespace CdScanStraightener.Tests;

@@ -1,4 +1,5 @@
 using CdScanStraightener.Cli;
+using CdScanStraightener.Common;
 using CdScanStraightener.Io;
 using OpenCvSharp;
 

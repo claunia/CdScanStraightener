@@ -1,6 +1,6 @@
 using System.Diagnostics;
 
-namespace CdScanStraightener.Io;
+namespace CdScanStraightener.Common;
 
 /// <summary>
 /// In-place console progress bar with percentage and ETA, drawn on stderr so redirected

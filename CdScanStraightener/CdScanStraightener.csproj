@@ -20,4 +20,8 @@
     <None Update="appsettings.json" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
+  <ItemGroup>
+    <ProjectReference Include="..\CdScanStraightener.Common\CdScanStraightener.Common.csproj" />
+  </ItemGroup>
+
 </Project>
