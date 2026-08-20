@@ -57,6 +57,16 @@ public static class TesseractOcr
                               .Where(l => l != "osd" && l != "equ" && l != "snum")
                               .ToArray();
 
+            // With a full tessdata install (120+ packs) joining everything makes each
+            // invocation unusably slow; restrict "auto" to the languages that actually
+            // appear on optical-media labels in western/japanese collections.
+            var common = new[]
+            {
+                "eng", "spa", "deu", "fra", "ita", "por", "nld", "swe", "dan", "nor", "fin", "pol", "ces", "jpn"
+            };
+
+            if(langs.Length > 8) langs = langs.Intersect(common).ToArray();
+
             return langs.Length > 0 ? string.Join('+', langs) : "eng";
         }
         catch
@@ -70,10 +80,13 @@ public static class TesseractOcr
     /// bounding boxes, or null if tesseract failed. Only words with conf ≥ 40, at least two
     /// characters and some letter/digit content are returned.
     /// </summary>
-    public static List<OcrWord>? RunTsv(string imagePath)
+    /// <param name="imagePath">Image file to OCR.</param>
+    /// <param name="psm">Tesseract page-segmentation mode: 11 (sparse text) suits whole
+    /// labels; 7 (single text line) suits tight single-line crops such as badges.</param>
+    public static List<OcrWord>? RunTsv(string imagePath, int psm = 11)
     {
         var psi = new ProcessStartInfo("tesseract",
-                                       $"\"{imagePath}\" stdout --psm 11 -l {LanguageOverride ?? Languages.Value} tsv")
+                                       $"\"{imagePath}\" stdout --psm {psm} -l {LanguageOverride ?? Languages.Value} tsv")
         {
             RedirectStandardOutput = true,
             RedirectStandardError  = true,
