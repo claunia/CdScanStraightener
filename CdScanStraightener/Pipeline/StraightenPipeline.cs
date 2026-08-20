@@ -490,6 +490,28 @@ public static class StraightenPipeline
                 }
             }
 
+            // Segmented text lines: the last classical resort for labels with no logo and
+            // no paragraph — plain music and indie discs. Whole-disc OCR renders their few
+            // small captions unreadably small; this reads each line on its own, normalized
+            // to a sane height, and derives its own axis so a projection winner that locked
+            // onto artwork cannot mislead it. Only confidently-read lines vote.
+            if(confidence < options.MinConfidence &&
+               TextLineScorer.Evaluate(ocrGray, ocrDisc, scratch) is var (bestLine, runnerLine) &&
+               bestLine.Score > 0)
+            {
+                if(Environment.GetEnvironmentVariable("CDSCAN_DEBUG") is not null)
+                    Console.Error
+                           .WriteLine($"  {Path.GetFileName(inputPath)}: text lines {bestLine.Angle:0.0}° score={bestLine.Score:0} lines={bestLine.Lines} vs {runnerLine.Angle:0.0}° {runnerLine.Score:0}");
+
+                if(bestLine.Score >= 400 && bestLine.Lines >= 2 &&
+                   bestLine.Score / Math.Max(1, runnerLine.Score) >= 1.6)
+                {
+                    angle      = bestLine.Angle;
+                    confidence = Math.Max(confidence, options.MinConfidence);
+                    method     += "+textlines";
+                }
+            }
+
             // Rotation-stability confidence: when the score ratio is indecisive
             // (multi-directional designs read a little text at several orientations), a
             // decisive classical signal remains — re-estimate on the same disc rotated by
