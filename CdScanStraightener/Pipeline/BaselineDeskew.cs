@@ -10,9 +10,16 @@ namespace CdScanStraightener.Pipeline;
 /// </summary>
 public static class BaselineDeskew
 {
-    /// <summary>Residual tilt in degrees (CCW-positive correction), or null if too little text.</summary>
-    public static double? Residual(Mat gray, Disc disc, double angle)
+    /// <summary>
+    /// Residual tilt in degrees (CCW-positive correction), or null if too little text.
+    /// <paramref name="strong"/> is set when a large quorum of wide text lines agrees
+    /// tightly — evidence solid enough to correct well beyond the usual sub-degree range
+    /// (an OCR-chosen winner can sit 10°+ off on a clear-text label, because tesseract
+    /// reads tilted text almost as well as straight text).
+    /// </summary>
+    public static double? Residual(Mat gray, Disc disc, double angle, out bool strong)
     {
+        strong = false;
         using var rot     = Cv2.GetRotationMatrix2D(disc.Center, angle, 1.0);
         using var rotated = new Mat();
         Cv2.WarpAffine(gray, rotated, rot, gray.Size(), InterpolationFlags.Linear, BorderTypes.Constant, Scalar.Black);
@@ -50,7 +57,7 @@ public static class BaselineDeskew
             a = ((a + 180) % 180 + 180) % 180;
 
             if(a > 90) a -= 180;
-            if(Math.Abs(a) > 5) continue; // only near-horizontal lines vote on residual tilt
+            if(Math.Abs(a) > 20) continue; // lines belonging to a different orientation don't vote
 
             angles.Add((a, w));
         }
@@ -58,23 +65,52 @@ public static class BaselineDeskew
         // Quorum and agreement: a couple of blobs, or blobs that disagree, prove nothing.
         if(angles.Count < 3) return null;
 
-        var ordered = angles.OrderBy(e => e.Angle).ToList();
-        var spread  = ordered[^1].Angle - ordered[0].Angle;
-
-        if(angles.Count < 5 && spread > 2.0) return null;
-
         // Width-weighted median.
-        var sorted = angles.OrderBy(e => e.Angle).ToList();
-        var half   = sorted.Sum(e => e.Weight) / 2;
-        double cum = 0;
+        var    sorted = angles.OrderBy(e => e.Angle).ToList();
+        var    total  = sorted.Sum(e => e.Weight);
+        var    half   = total / 2;
+        double cum    = 0;
+        var    median = sorted[^1].Angle;
 
         foreach(var e in sorted)
         {
             cum += e.Weight;
 
-            if(cum >= half) return e.Angle; // empirically calibrated: blob angle == needed CCW correction
+            if(cum < half) continue;
+
+            median = e.Angle; // empirically calibrated: blob angle == needed CCW correction
+
+            break;
         }
 
-        return sorted[^1].Angle;
+        // Strong quorum: many lines carrying most of the width agree tightly on one tilt.
+        var agreeing = sorted.Where(e => Math.Abs(e.Angle - median) <= 1.5).ToList();
+        strong = angles.Count >= 5 && agreeing.Count >= 4 && agreeing.Sum(e => e.Weight) >= total * 0.7;
+
+        // Without a strong quorum only near-horizontal agreement counts, as before.
+        if(!strong)
+        {
+            var near = sorted.Where(e => Math.Abs(e.Angle) <= 5).ToList();
+
+            if(near.Count < 3) return null;
+
+            var spread = near[^1].Angle - near[0].Angle;
+
+            if(near.Count < 5 && spread > 2.0) return null;
+
+            var    nearHalf = near.Sum(e => e.Weight) / 2;
+            double nearCum  = 0;
+
+            foreach(var e in near)
+            {
+                nearCum += e.Weight;
+
+                if(nearCum >= nearHalf) return e.Angle;
+            }
+
+            return near[^1].Angle;
+        }
+
+        return median;
     }
 }

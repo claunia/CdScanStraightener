@@ -264,6 +264,36 @@ public static class StraightenPipeline
                 return smallColor;
             }
 
+            // Baseline-quorum confidence: on clear-text labels the OCR winner is often the
+            // right orientation with a mediocre ratio (other directions read a little) and
+            // a tilt of several degrees (tesseract reads tilted text nearly as well as
+            // straight). A strong quorum of wide text lines agreeing on one tilt is
+            // independent classical evidence: it confirms the axis, measures the exact
+            // correction, and leaves OCR only the 180° flip to vouch for.
+            if(confidence < options.MinConfidence && ranked.Count > 0 && ranked[0].Score > 0 &&
+               !method.EndsWith("+structure-veto", StringComparison.Ordinal) &&
+               BaselineDeskew.Residual(ocrGray, ocrDisc, angle, out var quorum) is {} tilt &&
+               quorum && Math.Abs(tilt) <= 15)
+            {
+                var twin = scored.Where(sc => AngularDistance(sc.Angle, angle + 180) < 10)
+                                 .Select(sc => sc.Score)
+                                 .DefaultIfEmpty(0)
+                                 .Max();
+
+                var flipRatio = twin > 0 ? ranked[0].Score / twin : 10.0;
+
+                if(Environment.GetEnvironmentVariable("CDSCAN_DEBUG") is not null)
+                    Console.Error
+                           .WriteLine($"  {Path.GetFileName(inputPath)}: baseline quorum tilt {tilt:0.00}° flip-ratio {flipRatio:0.00}");
+
+                if(flipRatio >= 1.2)
+                {
+                    angle      = ((angle + tilt) % 360 + 360) % 360;
+                    confidence = Math.Max(confidence, options.MinConfidence);
+                    method     += "+baseline";
+                }
+            }
+
             // Rotation-stability confidence: when the score ratio is indecisive
             // (multi-directional designs read a little text at several orientations), a
             // decisive classical signal remains — re-estimate on the same disc rotated by
@@ -331,12 +361,19 @@ public static class StraightenPipeline
                     // Sub-degree finish: measure the residual tilt from the text baselines
                     // themselves at OCR resolution; the projection polish alone bottoms out
                     // around ±1° on sparse-text labels.
-                    if(BaselineDeskew.Residual(ocrGray, ocrDisc, angle) is {} residual)
+                    if(BaselineDeskew.Residual(ocrGray, ocrDisc, angle, out var strongQuorum) is {} residual)
                     {
                         if(Environment.GetEnvironmentVariable("CDSCAN_DEBUG") is not null)
-                            Console.Error.WriteLine($"  {Path.GetFileName(inputPath)}: pre-deskew {angle:0.00}° residual {residual:0.00}°");
+                            Console.Error
+                                   .WriteLine($"  {Path.GetFileName(inputPath)}: pre-deskew {angle:0.00}° residual {residual:0.00}°{(strongQuorum ? " (strong quorum)" : "")}");
 
-                        if(Math.Abs(residual) <= 3) angle = ((angle + residual) % 360 + 360) % 360;
+                        // A strong quorum of agreeing text lines may correct well beyond the
+                        // sub-degree range: an OCR-chosen winner sits many degrees off on
+                        // clear-text labels because tesseract reads tilted text nearly as
+                        // well as straight text.
+                        var limit = strongQuorum ? 15.0 : 3.0;
+
+                        if(Math.Abs(residual) <= limit) angle = ((angle + residual) % 360 + 360) % 360;
                     }
 
                     // Vision verification: for anything short of overwhelming confidence, show
