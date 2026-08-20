@@ -179,6 +179,23 @@ public static class StraightenPipeline
 
                     scored.Add((arc.Angle, arc.Score));
                 }
+
+                // Straight graphic structure (logo frames, badges, ruled boxes) is printed
+                // axis-aligned on most designs even when the text is deliberately tilted or
+                // multi-directional; a sharp segment-orientation peak proposes four more
+                // rotations for OCR to choose among.
+                foreach(var structural in StructureEstimator.Candidates(small, smallDisc))
+                {
+                    if(scored.Any(sc => AngularDistance(sc.Angle, structural) < 3)) continue;
+
+                    var score = OcrUprightResolver.OcrScore(ocrGray, ocrDisc, structural, scratch) ?? 0;
+
+                    if(Environment.GetEnvironmentVariable("CDSCAN_DEBUG") is not null)
+                        Console.Error
+                               .WriteLine($"  {Path.GetFileName(inputPath)}: structure candidate {structural:0.00}° ocr={score:0}");
+
+                    scored.Add((((structural % 360) + 360) % 360, score));
+                }
             }
 
             var ranked = scored.OrderByDescending(s => s.Score).ToList();
@@ -264,6 +281,127 @@ public static class StraightenPipeline
                 return smallColor;
             }
 
+            // Structure corroboration: an answer chosen by text legibility that also brings
+            // the label's straight graphic structure into its printed alignment is confirmed
+            // by two independent signals — trustworthy without any model. The converse —
+            // strong structure that a marginal winner clearly misaligns — is a classical
+            // veto, or better, a classical re-pick.
+            //
+            // A dominant rectangular badge (a "PC CD-ROM" box, a banner) is the strongest
+            // structural cue and works mod 180: badges are printed long-axis HORIZONTAL, so
+            // a result that leaves the badge vertical is a 90°-off answer even though it is
+            // perfectly "axis-aligned" mod 90. Anonymous segments only support mod 90.
+            var rectPick = ranked.Count > 0 && ranked[0].Score > 0
+                               ? StructureEstimator.RectanglePick(small, smallDisc)
+                               : null;
+
+            if(rectPick is {} pick)
+            {
+                var rectTheta = pick.Theta;
+                var longAxis  = ((rectTheta + angle) % 180 + 180) % 180;
+                var offHoriz = Math.Min(longAxis, 180 - longAxis);
+
+                if(Environment.GetEnvironmentVariable("CDSCAN_DEBUG") is not null)
+                    Console.Error
+                           .WriteLine($"  {Path.GetFileName(inputPath)}: rectangle long axis {rectTheta:0.00}° off-horizontal after rotation {offHoriz:0.00}°");
+
+                if(offHoriz <= 1.5 && confidence >= 1.2)
+                {
+                    confidence = Math.Max(confidence, options.MinConfidence);
+                    method     += "+structure";
+                }
+                else if(offHoriz <= 6 && confidence >= 1.2)
+                {
+                    // Same flip, small tilt: the text evidence chose the right orientation
+                    // but sits a few degrees off (tesseract reads tilted text nearly as well
+                    // as straight); the badge measures the exact correction.
+                    var a       = ((-rectTheta % 180) + 180) % 180;
+                    var aligned = AngularDistance(a, angle) <= AngularDistance(a + 180, angle) ? a : a + 180;
+
+                    angle      = aligned;
+                    confidence = Math.Max(confidence, options.MinConfidence);
+                    method     += "+structure-align";
+                }
+                else if(offHoriz > 6 && confidence < 2.5)
+                {
+                    // The weak winner leaves the badge tilted or vertical. Only two
+                    // rotations make it horizontal; when OCR can break that 180° tie the
+                    // combined evidence replaces the winner. Otherwise refusing beats
+                    // confidently applying a wrong rotation.
+                    var a    = ((-rectTheta % 180) + 180) % 180;
+                    var pair = new[] { a, a + 180 };
+
+                    // Whole-disc OCR legibility decides the flip, but single samples are
+                    // noisy enough to flip a 180° decision and even a summed sample can lie
+                    // on logo-art labels. Require two independent scales to agree on the
+                    // direction, each summed over three nearby angles; when they disagree,
+                    // or the weaker scale is not decisive, refuse instead of guessing.
+                    using var smallOcr = new Mat();
+                    small.CopyTo(smallOcr);
+                    PreprocessForOcr(smallOcr, smallDisc);
+
+                    double PairSum(Mat img, Disc dsc, double p) =>
+                        new[] { -1.5, 0.0, 1.5 }
+                           .Sum(off => OcrUprightResolver.OcrScore(img, dsc, ((p + off) % 360 + 360) % 360,
+                                                                   scratch) ??
+                                       0);
+
+                    var ocrA = PairSum(ocrGray, ocrDisc, pair[0]);
+                    var ocrB = PairSum(ocrGray, ocrDisc, pair[1]);
+                    var detA = PairSum(smallOcr, smallDisc, pair[0]);
+                    var detB = PairSum(smallOcr, smallDisc, pair[1]);
+
+                    var sameDirection = ocrA >= ocrB == detA >= detB;
+                    var ratioOcr      = Math.Max(ocrA, ocrB) / Math.Max(1, Math.Min(ocrA, ocrB));
+                    var ratioDet      = Math.Max(detA, detB) / Math.Max(1, Math.Min(detA, detB));
+
+                    var pairScores = new List<(double Angle, double Score)>
+                    {
+                        (pair[0], ocrA + detA), (pair[1], ocrB + detB)
+                    };
+
+                    pairScores = pairScores.OrderByDescending(pp => pp.Score).ToList();
+
+                    var decisive = sameDirection && Math.Min(ratioOcr, ratioDet) >= 1.35 && pairScores[0].Score > 0;
+
+                    if(Environment.GetEnvironmentVariable("CDSCAN_DEBUG") is not null)
+                        Console.Error
+                               .WriteLine($"  {Path.GetFileName(inputPath)}: rectangle pick {rectTheta:0.00}° -> {pairScores[0].Angle:0.00}° ocr {pairScores[0].Score:0} vs {pairScores[1].Score:0}");
+
+                    if(decisive)
+                    {
+                        angle      = pairScores[0].Angle;
+                        confidence = Math.Max(confidence, options.MinConfidence);
+                        method     += "+structure-pick";
+                    }
+                    else
+                    {
+                        confidence = Math.Min(confidence, options.MinConfidence * 0.79);
+                        method     += "+structure-veto";
+                    }
+                }
+            }
+            else if(StructureEstimator.Dominant(small, smallDisc) is {} st && ranked.Count > 0 && ranked[0].Score > 0)
+            {
+                var aligned = ((st.Orientation + angle) % 90 + 90) % 90;
+                var offAxis = Math.Min(aligned, 90 - aligned);
+
+                if(Environment.GetEnvironmentVariable("CDSCAN_DEBUG") is not null)
+                    Console.Error
+                           .WriteLine($"  {Path.GetFileName(inputPath)}: structure peak {st.Orientation:0.00}° sharpness={st.Sharpness:0.00} off-axis after rotation {offAxis:0.00}°");
+
+                if(st.Sharpness >= 0.5 && offAxis <= 1.5 && confidence >= 1.2)
+                {
+                    confidence = Math.Max(confidence, options.MinConfidence);
+                    method     += "+structure";
+                }
+                else if(st.Sharpness >= 0.65 && offAxis > 6 && confidence < 2.5)
+                {
+                    confidence = Math.Min(confidence, options.MinConfidence * 0.79);
+                    method     += "+structure-veto";
+                }
+            }
+
             // Baseline-quorum confidence: on clear-text labels the OCR winner is often the
             // right orientation with a mediocre ratio (other directions read a little) and
             // a tilt of several degrees (tesseract reads tilted text nearly as well as
@@ -299,8 +437,11 @@ public static class StraightenPipeline
             // decisive classical signal remains — re-estimate on the same disc rotated by
             // 37°. If the answer tracks the rotation, the estimator follows real label
             // features, not noise, and the result is trustworthy.
+            // The structure veto is final for classical escalation: a projection/OCR
+            // estimator locked onto a deliberately tilted text block tracks a probe
+            // rotation perfectly — stability must not resurrect what structure refuted.
             if(confidence < options.MinConfidence && ranked.Count > 0 && ranked[0].Score > 0 &&
-               OcrUprightResolver.IsAvailable)
+               !method.EndsWith("+structure-veto", StringComparison.Ordinal) && OcrUprightResolver.IsAvailable)
             {
                 const double probe = 37.0;
 
@@ -327,7 +468,15 @@ public static class StraightenPipeline
             {
                 if(confidence < options.MinConfidence && options.OpenAi.IsUsable)
                 {
-                    var orientations = scored.Count > 0
+                    // A dominant rectangle pins the axis classically; the model only ever
+                    // gets to break the remaining 180° tie — never to propose an
+                    // orientation that leaves the badge tilted or vertical.
+                    var orientations = rectPick is {} rp0 && rp0.Theta is {} rp
+                                           ? new List<double>
+                                           {
+                                               ((-rp % 180) + 180) % 180, ((-rp % 180) + 180) % 180 + 180
+                                           }
+                                           : scored.Count > 0
                                            ? ranked.Take(6).Select(s => s.Angle).ToList()
                                            : candidates.SelectMany(c => new[]
                                                         {
@@ -337,9 +486,9 @@ public static class StraightenPipeline
                                                        .ToList();
 
                     if(OpenAiOrientationResolver.Resolve(SmallColor(), smallDisc, orientations, options.OpenAi) is {}
-                       pick)
+                       aiPick)
                     {
-                        angle      = pick;
+                        angle      = aiPick;
                         confidence = options.MinConfidence; // the model's choice is applied
                         method     += "+openai";
                     }
@@ -351,12 +500,21 @@ public static class StraightenPipeline
                     // estimator proposed them (the implicit 0° and arc candidates only a few
                     // degrees), so re-center on the OCR-legibility maximum ±8°, then fine
                     // projection polish. This removes the residual "almost straight" tilts.
-                    angle = RefineWithOcr(ocrGray, ocrDisc, angle, scratch);
+                    //
+                    // Drift cap: polish exists for precision, not to re-decide. On designs
+                    // with a deliberately slanted text block, legibility keeps improving all
+                    // the way to "slanted block horizontal" and the polish chain walks many
+                    // degrees away from a decisive coarse winner — a worse answer with better
+                    // OCR. If polish moves more than a few degrees, revert to the decided
+                    // angle and only fine-tune narrowly around it.
+                    var decided  = angle;
+                    var polished = RefineWithOcr(ocrGray, ocrDisc, angle, scratch);
+                    polished = AngleEstimator.RefineAround(ocrGray, ocrDisc, polished, window: 6.0, step: 0.5);
 
-                    // Precision polish at OCR resolution: the winning coarse peak can sit
-                    // several degrees off (2° grid, low-res scoring), so sweep a ±6° window
-                    // down to 0.1° steps on the high-resolution image.
-                    angle = AngleEstimator.RefineAround(ocrGray, ocrDisc, angle, window: 6.0, step: 0.5);
+                    if(AngularDistance(polished, decided) <= 4.0)
+                        angle = polished;
+                    else
+                        angle = AngleEstimator.RefineAround(ocrGray, ocrDisc, decided, window: 2.0, step: 0.25);
 
                     // Sub-degree finish: measure the residual tilt from the text baselines
                     // themselves at OCR resolution; the projection polish alone bottoms out
@@ -389,8 +547,17 @@ public static class StraightenPipeline
                         {
                             var accepted = false;
 
+                            // With a dominant rectangle, only alternatives that keep the
+                            // badge horizontal are acceptable — the model must not walk the
+                            // answer onto a structure-misaligned orientation.
                             foreach(var alt in ranked.Where(r => r.Score > 0 &&
-                                                                 AngularDistance(r.Angle, angle) > 20)
+                                                                 AngularDistance(r.Angle, angle) > 20 &&
+                                                                 (rectPick is not {} rp2 ||
+                                                                  Math.Min(((rp2.Theta + r.Angle) % 180 + 180) % 180,
+                                                                           180 -
+                                                                           ((rp2.Theta + r.Angle) % 180 + 180) %
+                                                                           180) <=
+                                                                  6))
                                                      .Select(r => r.Angle)
                                                      .Take(3))
                             {
