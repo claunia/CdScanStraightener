@@ -447,6 +447,49 @@ public static class StraightenPipeline
                 }
             }
 
+            // Paragraph-block flip evidence: liner-note style labels carry a large dense
+            // text block, and OCRing that block alone (uniform-block mode) is decisively
+            // orientation-sensitive where whole-disc sparse OCR is a coin flip. A block
+            // that reads clearly better in one direction settles both the flip and the
+            // confidence classically.
+            // (A decisively readable paragraph outranks the segment-histogram veto, so
+            // this deliberately runs for structure-vetoed results too.) The block is
+            // evaluated on both plausible axes — the text winner can sit 90° off, and a
+            // flip-only comparison on the wrong axis decides between two garbage reads —
+            // and the chosen orientation must out-read all three alternatives.
+            if(confidence < options.MinConfidence && ranked.Count > 0 && ranked[0].Score > 0)
+            {
+                var reads = new List<(double Angle, double Score)>();
+
+                foreach(var axis in new[] { angle, ((angle + 90) % 360 + 360) % 360 })
+                {
+                    if(ParagraphFlip.Score(ocrGray, ocrDisc, axis, scratch) is not {} para) continue;
+
+                    if(Environment.GetEnvironmentVariable("CDSCAN_DEBUG") is not null)
+                        Console.Error
+                               .WriteLine($"  {Path.GetFileName(inputPath)}: paragraph block @{axis:0.0}° {para.Upright:0} vs flipped {para.Flipped:0}");
+
+                    reads.Add((axis, para.Upright));
+                    reads.Add((((axis + 180) % 360 + 360) % 360, para.Flipped));
+                }
+
+                if(reads.Count > 0)
+                {
+                    var ordered = reads.OrderByDescending(r => r.Score).ToList();
+
+                    // Absolute floor: a paragraph that truly reads produces thousands of
+                    // confidence-weighted letters; garbage stays in the hundreds.
+                    if(ordered[0].Score >= 1500 &&
+                       ordered[0].Score / Math.Max(1, ordered.Skip(1).Select(r => r.Score).DefaultIfEmpty(0).Max()) >=
+                       1.5)
+                    {
+                        angle      = ordered[0].Angle;
+                        confidence = Math.Max(confidence, options.MinConfidence);
+                        method     += "+paragraph";
+                    }
+                }
+            }
+
             // Rotation-stability confidence: when the score ratio is indecisive
             // (multi-directional designs read a little text at several orientations), a
             // decisive classical signal remains — re-estimate on the same disc rotated by
