@@ -148,6 +148,21 @@ public static class StraightenPipeline
                                    (float)(smallDisc.Radius / scale * ocrScale),
                                    smallDisc.Method);
 
+            // Known-logo anchoring first: rating squares, platform wordmarks and media
+            // badges are printed upright, and one confident keypoint match pins the full
+            // 360° orientation with sub-degree precision — stronger than any text
+            // heuristic, immune to the 180° ambiguity. Run on the raw gray (before OCR
+            // preprocessing mutates it).
+            if(LogoAnchor.Resolve(ocrGray, minInliers: 10) is {} logo)
+            {
+                if(Environment.GetEnvironmentVariable("CDSCAN_DEBUG") is not null)
+                    Console.Error
+                           .WriteLine($"  {Path.GetFileName(inputPath)}: logo anchor {logo.Template} {logo.Angle:0.00}° inliers={logo.Inliers} scale={logo.Scale:0.00}");
+
+                return Finish(inputPath, outputPath, options, src, fullDisc, small, smallDisc, logo.Angle,
+                              Math.Max(5.0, options.MinConfidence), $"logo:{logo.Template}+{smallDisc.Method}");
+            }
+
             PreprocessForOcr(ocrGray, ocrDisc);
 
             if(OcrUprightResolver.IsAvailable)
@@ -588,6 +603,13 @@ public static class StraightenPipeline
             }
         }
 
+        return Finish(inputPath, outputPath, options, src, fullDisc, small, smallDisc, angle, confidence, method);
+    }
+
+    /// <summary>Common tail of <see cref="ProcessFile"/>: debug artifacts, rotation, write, metadata, result.</summary>
+    private static AngleResult Finish(string inputPath, string outputPath, Options options, Mat src, Disc fullDisc,
+                                      Mat small, Disc smallDisc, double angle, double confidence, string method)
+    {
         if(options.DebugDir is {} dbg) WriteDebugArtifacts(dbg, inputPath, small, smallDisc, angle);
 
         var applied = confidence >= options.MinConfidence;

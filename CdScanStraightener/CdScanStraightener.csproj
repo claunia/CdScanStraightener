@@ -24,4 +24,7 @@
     <ProjectReference Include="..\CdScanStraightener.Common\CdScanStraightener.Common.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <Content Include="Templates/*.png" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
 </Project>
