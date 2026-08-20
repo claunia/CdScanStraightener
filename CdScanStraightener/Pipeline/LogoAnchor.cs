@@ -13,20 +13,32 @@ namespace CdScanStraightener.Pipeline;
 /// scanners, resolutions and rotations; the transform's scale component measures the DPI
 /// difference instead of assuming it. Templates are tried at several pre-scales because
 /// ORB's own pyramid only covers a limited scale range.
+///
+/// Cost model: template keypoints/descriptors for every pre-scale are computed once per
+/// process, the scene descriptors are indexed once per disc (FLANN LSH — approximate,
+/// but the RANSAC stage only needs enough true correspondences to converge), and the
+/// scan early-exits on an unambiguous match.
 /// </summary>
 public static class LogoAnchor
 {
     public sealed record Match(string Template, double Angle, int Inliers, double Scale);
 
-    private sealed record Template(string Name, Mat Image, KeyPoint[] Keypoints, Mat Descriptors);
+    private sealed record Rendition(string Name, double PreScale, KeyPoint[] Keypoints, Mat Descriptors);
 
-    private static readonly Lazy<List<Template>> Templates = new(LoadTemplates);
+    private static readonly double[] PreScales = [1.0, 0.5, 0.33];
 
-    public static bool IsAvailable => Templates.Value.Count > 0;
+    // One entry per template per usable pre-scale, grouped by pre-scale so the common
+    // full-size renditions are tried (and can short-circuit) before the shrunken ones.
+    private static readonly Lazy<List<Rendition>> Renditions = new(LoadRenditions);
 
-    private static List<Template> LoadTemplates()
+    /// <summary>An unambiguous match: stop scanning the remaining templates.</summary>
+    private const int DecisiveInliers = 30;
+
+    public static bool IsAvailable => Renditions.Value.Count > 0;
+
+    private static List<Rendition> LoadRenditions()
     {
-        var list = new List<Template>();
+        var list = new List<Rendition>();
 
         var dirs = new[]
         {
@@ -37,34 +49,40 @@ public static class LogoAnchor
 
         if(dir is null) return list;
 
-        using var orb = ORB.Create(nFeatures: 1500);
+        using var orb = ORB.Create(nFeatures: 500);
 
         foreach(var file in Directory.EnumerateFiles(dir, "*.png").OrderBy(f => f))
         {
-            var img = Cv2.ImRead(file, ImreadModes.Grayscale);
+            using var img = Cv2.ImRead(file, ImreadModes.Grayscale);
 
-            if(img.Empty() || Math.Min(img.Width, img.Height) < 24)
+            if(img.Empty() || Math.Min(img.Width, img.Height) < 24) continue;
+
+            var name = Path.GetFileNameWithoutExtension(file);
+
+            foreach(var preScale in PreScales)
             {
-                img.Dispose();
+                using var scaled = new Mat();
+                Cv2.Resize(img, scaled, default, preScale, preScale, InterpolationFlags.Area);
 
-                continue;
+                if(Math.Min(scaled.Width, scaled.Height) < 24) continue;
+
+                var desc = new Mat();
+                orb.DetectAndCompute(scaled, null, out var kp, desc);
+
+                if(kp.Length < 20)
+                {
+                    desc.Dispose();
+
+                    continue;
+                }
+
+                list.Add(new Rendition(name, preScale, kp, desc));
             }
-
-            var desc = new Mat();
-            orb.DetectAndCompute(img, null, out var kp, desc);
-
-            if(kp.Length < 30)
-            {
-                img.Dispose();
-                desc.Dispose();
-
-                continue;
-            }
-
-            list.Add(new Template(Path.GetFileNameWithoutExtension(file), img, kp, desc));
         }
 
-        return list;
+        // Group by pre-scale (full size first): a decisive full-size match makes the
+        // shrunken renditions unnecessary.
+        return list.OrderBy(r => Array.IndexOf(PreScales, r.PreScale)).ToList();
     }
 
     /// <summary>
@@ -74,7 +92,7 @@ public static class LogoAnchor
     /// count a match must reach — true matches on these labels score 40+, false ones
     /// rarely exceed single digits.
     /// </summary>
-    public static Match? Resolve(Mat gray, int minInliers = 12)
+    public static Match? Resolve(Mat gray, int minInliers = 10)
     {
         if(!IsAvailable) return null;
 
@@ -85,101 +103,61 @@ public static class LogoAnchor
         if(sceneKp.Length < 50) return null;
 
         using var matcher = new BFMatcher(NormTypes.Hamming);
-        Match?    best    = null;
+        matcher.Add([sceneDesc]);
 
-        foreach(var template in Templates.Value)
+        Match? best = null;
+
+        foreach(var rendition in Renditions.Value)
         {
-            // Templates were cropped from ~1500 px scans; scenes are normalized to a
-            // similar size, but high-DPI sources shrink the logos when downscaled, so try
-            // smaller template renditions too.
-            foreach(var preScale in new[] { 1.0, 0.66, 0.5, 0.33 })
-            {
-                KeyPoint[] tKp;
-                Mat        tDesc;
-                Mat?       scaled = null;
+            var knn = matcher.KnnMatch(rendition.Descriptors, 2);
 
-                if(Math.Abs(preScale - 1.0) < 1e-9)
-                {
-                    tKp   = template.Keypoints;
-                    tDesc = template.Descriptors;
-                }
-                else
-                {
-                    scaled = new Mat();
-                    Cv2.Resize(template.Image, scaled, default, preScale, preScale, InterpolationFlags.Area);
+            var good = knn.Where(m => m.Length == 2 && m[0].Distance < 0.75 * m[1].Distance)
+                          .Select(m => m[0])
+                          .ToArray();
 
-                    if(Math.Min(scaled.Width, scaled.Height) < 24)
-                    {
-                        scaled.Dispose();
+            if(good.Length < 8) continue;
 
-                        continue;
-                    }
+            var src = good.Select(m => new Point2f(rendition.Keypoints[m.QueryIdx].Pt.X,
+                                                   rendition.Keypoints[m.QueryIdx].Pt.Y))
+                          .ToArray();
 
-                    using var torb = ORB.Create(nFeatures: 1500);
-                    tDesc = new Mat();
-                    torb.DetectAndCompute(scaled, null, out tKp, tDesc);
-                }
+            var dst = good.Select(m => new Point2f(sceneKp[m.TrainIdx].Pt.X, sceneKp[m.TrainIdx].Pt.Y)).ToArray();
 
-                try
-                {
-                    if(tKp.Length < 20) continue;
+            using var inlierMask = new Mat();
 
-                    var knn = matcher.KnnMatch(tDesc, sceneDesc, 2);
+            using var transform = Cv2.EstimateAffinePartial2D(InputArray.Create(src),
+                                                              InputArray.Create(dst),
+                                                              inlierMask,
+                                                              RobustEstimationAlgorithms.RANSAC,
+                                                              4.0,
+                                                              5000,
+                                                              0.99,
+                                                              20);
 
-                    var good = knn.Where(m => m.Length == 2 && m[0].Distance < 0.75 * m[1].Distance)
-                                  .Select(m => m[0])
-                                  .ToArray();
+            if(transform.Empty()) continue;
 
-                    if(good.Length < 8) continue;
+            inlierMask.GetArray(out byte[] flags);
+            var inliers = flags.Count(f => f != 0);
 
-                    var src = good.Select(m => new Point2f(tKp[m.QueryIdx].Pt.X, tKp[m.QueryIdx].Pt.Y)).ToArray();
+            if(inliers < minInliers) continue;
 
-                    var dst = good.Select(m => new Point2f(sceneKp[m.TrainIdx].Pt.X, sceneKp[m.TrainIdx].Pt.Y))
-                                  .ToArray();
+            var a     = transform.At<double>(0, 0);
+            var b     = transform.At<double>(1, 0);
+            var scale = Math.Sqrt(a * a + b * b) / rendition.PreScale;
 
-                    using var inlierMask = new Mat();
+            // Similarity sanity: a real print of the same logo lands within a credible
+            // physical size range of the template.
+            if(scale is < 0.2 or > 3.0) continue;
 
-                    using var transform = Cv2.EstimateAffinePartial2D(InputArray.Create(src),
-                                                                      InputArray.Create(dst),
-                                                                      inlierMask,
-                                                                      RobustEstimationAlgorithms.RANSAC,
-                                                                      4.0,
-                                                                      5000,
-                                                                      0.99,
-                                                                      20);
+            // The rotation of the template into the scene, in this codebase's rotation
+            // convention, is directly the correction to apply (verified against
+            // known-angle discs).
+            var angle = Math.Atan2(b, a) * 180 / Math.PI;
 
-                    if(transform.Empty()) continue;
+            if(best is null || inliers > best.Inliers)
+                best = new Match(rendition.Name, ((angle % 360) + 360) % 360, inliers, scale);
 
-                    inlierMask.GetArray(out byte[] flags);
-                    var inliers = flags.Count(f => f != 0);
-
-                    if(inliers < minInliers) continue;
-
-                    var a     = transform.At<double>(0, 0);
-                    var b     = transform.At<double>(1, 0);
-                    var scale = Math.Sqrt(a * a + b * b) / preScale;
-
-                    // Similarity sanity: a real print of the same logo lands within a
-                    // credible physical size range of the template.
-                    if(scale is < 0.2 or > 3.0) continue;
-
-                    // The rotation of the template into the scene, in this codebase's
-                    // rotation convention, is directly the correction to apply (verified
-                    // against known-angle discs).
-                    var angle = Math.Atan2(b, a) * 180 / Math.PI;
-
-                    if(best is null || inliers > best.Inliers)
-                        best = new Match(template.Name, ((angle % 360) + 360) % 360, inliers, scale);
-                }
-                finally
-                {
-                    if(scaled is not null)
-                    {
-                        tDesc.Dispose();
-                        scaled.Dispose();
-                    }
-                }
-            }
+            if(best.Inliers >= DecisiveInliers) return best;
         }
 
         return best;
