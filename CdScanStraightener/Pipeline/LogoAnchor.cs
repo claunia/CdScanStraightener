@@ -25,7 +25,7 @@ public static class LogoAnchor
 
     private sealed record Rendition(string Name, double PreScale, KeyPoint[] Keypoints, Mat Descriptors);
 
-    private static readonly double[] PreScales = [1.0, 0.5, 0.33];
+    private static readonly double[] PreScales = [1.0, 1.5, 0.5, 0.33];
 
     // One entry per template per usable pre-scale, grouped by pre-scale so the common
     // full-size renditions are tried (and can short-circuit) before the shrunken ones.
@@ -80,8 +80,9 @@ public static class LogoAnchor
             }
         }
 
-        // Group by pre-scale (full size first): a decisive full-size match makes the
-        // shrunken renditions unnecessary.
+        // Group by pre-scale in descending order of prior likelihood (native size first):
+        // the scan early-exits on the first decisive match, so the rendition most likely
+        // to be right must be tried first.
         return list.OrderBy(r => Array.IndexOf(PreScales, r.PreScale)).ToList();
     }
 
