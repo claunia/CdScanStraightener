@@ -68,7 +68,7 @@ A progress bar with ETA is shown on stderr while running; per-file results print
 | `--min-confidence <n>` | Below this confidence the image is copied unrotated with a warning (default `1.5`). |
 | `--overwrite` | Overwrite existing files in the output folder (default: skip them). |
 | `--verify-below <n>` | Vision-verify results whose confidence is below this value (default `3.0`); pass a large number to verify every image — slow but thorough. |
-| `--ocr-langs <langs>` | Tesseract language(s) for orientation OCR, e.g. `eng` or `eng+spa` (default `auto` = all installed packs). |
+| `--ocr-langs <langs>` | Tesseract language(s) for orientation OCR, e.g. `eng` or `eng+spa` (default `auto`). With a handful of packs installed `auto` uses all of them; with a full tessdata install it narrows to the languages that actually appear on optical-media labels, since joining 120+ packs makes every invocation unusably slow. |
 | `--center` | Center the disc on a white square canvas (disc diameter + safe area per side); everything outside the disc becomes white. **Changes output dimensions** (DPI is kept, so physical scale is preserved). Files below `--min-confidence` are copied completely untouched — not centered either. |
 | `--safe-area <px>` | White margin around the disc when using `--center` (default `25`). |
 
@@ -87,8 +87,9 @@ file, angle_deg, confidence, applied, method, disc_cx, disc_cy, disc_radius
 
 `angle_deg` is the counterclockwise correction in (−180, 180]. `applied` tells whether it
 was actually used or suppressed by `--min-confidence`. `method` records which stages decided
-(`projection`, `ocr`, `heuristic`, `openai`, and the disc-detection mode `hough` /
-`contour` / `assumed-center`).
+(`logo:<template>`, `projection`, `ocr`, `heuristic`, `structure` / `structure-align` /
+`structure-pick` / `structure-veto`, `baseline`, `paragraph`, `textlines`, `stable`,
+`openai`, plus the disc-detection mode `hough` / `contour` / `assumed-center`).
 
 ## How it works
 
@@ -96,18 +97,38 @@ was actually used or suppressed by `--min-confidence`. `method` records which st
    the final rotation is applied at full resolution): Hough circle transform, falling back
    to Otsu thresholding + largest-contour enclosing circle, then to an assumed centered
    disc. An annulus mask isolates the printable label area, excluding the hub and the rim.
-2. **Angle estimation** — classic projection-profile method: the label's edge map is
+2. **Logo anchoring** — tried first, because it is the only signal that recovers the full
+   360° orientation outright. Rating squares (USK/PEGI/ESRB/BBFC), platform wordmarks
+   (Wii, Wii U, GameCube, PlayStation, Xbox, Sega, 3DO, PC Engine), media badges (COMPACT
+   disc in its several renditions, DVD, CD-i, PC CD-ROM) and publisher marks are all
+   printed upright on the label. ORB keypoints are matched against a library of upright
+   template crops and a RANSAC similarity transform gives the rotation directly — no OCR,
+   no 180° ambiguity, and sub-degree precision. The transform's scale component *measures*
+   the DPI difference rather than assuming it, so templates work across scanners and
+   resolutions; each template is additionally tried at several pre-scales, including one
+   upscale, because ORB's own pyramid covers a limited range. Ten RANSAC inliers decide the
+   disc — genuine matches reach dozens to hundreds, false ones rarely leave single digits.
+   See [Logo templates](#logo-templates) for adding your own.
+3. **Angle estimation** — classic projection-profile method: the label's edge map is
    rotated through candidate angles (2° coarse sweep, 0.25° refinement) and scored by the
    variance of its horizontal row sums; upright horizontal text lines give a peaky profile.
    The top sweep peaks (≥ 8° apart) are kept as candidates, **plus 0°** — carefully placed
    scans are common, and artwork with deliberately tilted text blocks can out-score the
    design's true upright.
-3. **Arc-text estimation** — circumferential (rim/arc-set) text is invisible to the
+4. **Arc-text estimation** — circumferential (rim/arc-set) text is invisible to the
    projection sweep, so the label annulus is polar-unwrapped into a strip where arc text
    becomes horizontal, OCRed with wraparound handling, and the strongest angular cluster of
    readable words proposes the rotations that bring the arc to the top (or bottom, seal
    style) of the disc — both 180° interpretations become candidates.
-4. **Structure estimation** — logo frames, badges and boxes are printed axis-aligned on
+5. **Orientation selection** — with `tesseract` on `PATH`, every candidate is OCRed in both
+   180° orientations and the most legible wins. Before OCR the label is CLAHE-equalized
+   and, for dark labels, polarity-inverted — tesseract reads dark-on-light far better, and
+   silver or black discs with faint printing defeat it entirely without this. Confidence is
+   how decisively the winner out-reads the best *genuinely different* orientation. Without
+   tesseract, the best projection peak is used with a typography heuristic (ink-mass
+   position within text-line bands) for the 180° ambiguity, and confidence is the sweep's
+   peak-to-median variance ratio.
+6. **Structure estimation** — logo frames, badges and boxes are printed axis-aligned on
    most designs even when the text is deliberately tilted or runs in several directions.
    Line segments (Hough), solid rectangular badges (two-level Otsu blobs whose min-area
    rect fits tightly) and outlined boxes (convex 4–8-gon contours) vote in a
@@ -120,33 +141,80 @@ was actually used or suppressed by `--min-confidence`. `method` records which st
    refusing beats confidently applying a wrong rotation. Refinement polish is drift-capped
    (≤4°) so it can only sharpen the decided answer, never re-decide it toward a
    deliberately slanted text block.
-5. **Adaptive escalation and stability** — when OCR evidence is weak, scoring is repeated
-   at higher resolution (2560 px, small print often becomes decisive), and indecisive
-   results get a rotation-stability probe: the disc is re-estimated pre-rotated by 37°,
-   and an answer that tracks the rotation proves the estimator follows real label
-   features, upgrading the confidence classically — no model call needed.
-6. **Orientation selection** — with `tesseract` on `PATH`, every candidate is OCRed in both
-   180° orientations and the most legible wins. Before OCR the label is CLAHE-equalized
-   and, for dark labels, polarity-inverted — tesseract reads dark-on-light far better, and
-   silver or black discs with faint printing defeat it entirely without this. All installed language packs are used by
-   default (`--ocr-langs` overrides) — install the packs matching your discs' languages. Confidence is how decisively the winner
-   out-reads the runner-up. Without tesseract, the best projection peak is used with a
-   typography heuristic (ink-mass position within text-line bands) for the 180° ambiguity,
-   and confidence is the sweep's peak-to-median variance ratio.
-7. **Vision-model fallback (optional)** — labels with text running in several directions
-   (radial text, opposing blocks, arc-set titles) leave OCR unable to separate the
-   orientations. For those, a vision LLM can pick: the model is never asked for an angle —
-   it answers a multiple-choice question over thumbnails rendered at the precise candidate
-   angles. See configuration below.
-8. **Rotation** — `warpAffine` with Lanczos4 about the **disc center** (not the image
-   center, so an off-center disc stays in place), destination size = source size, uncovered
-   corners filled with the median scanner-background color sampled from the image corners.
-9. **Metadata** — OpenCV's PNG encoder drops ancillary chunks, so `pHYs` (DPI), `iCCP`
-   (ICC profile), `sRGB`, `gAMA` and `cHRM` are copied verbatim from the source file into
-   the output via a minimal PNG chunk parser.
+
+Anything still below the confidence threshold goes through the classical escalations
+below, in order, each of which can settle the answer on its own:
+
+7. **Baseline quorum** (`+baseline`) — tesseract reads tilted text nearly as well as
+   straight text, so an OCR-chosen winner can sit 10°+ off on a clear-text label. A large
+   quorum of wide text lines agreeing tightly on one tilt is independent evidence: it
+   confirms the axis, measures the exact correction (up to 15°, versus 3° for the ordinary
+   sub-degree polish), and leaves OCR only the 180° flip to vouch for.
+8. **Paragraph block** (`+paragraph`) — liner-note style labels carry a large dense text
+   block, and OCRing that block alone in uniform-block mode is decisively
+   orientation-sensitive where whole-disc sparse OCR is a coin flip. Character-scale
+   filtering drops display titles and artwork, compactness caps reject circumferential
+   text rings (locally horizontal everywhere, they read plausibly at any rotation), and
+   row-versus-column banding plus the measured slope of the line blobs confirm the lines
+   really run horizontally before OCR is trusted. The block is read on both plausible axes
+   and must clear an absolute floor and beat all three alternatives.
+9. **Segmented text lines** (`+textlines`) — the last classical resort, for plain music and
+   indie labels that carry no anchorable logo and no paragraph. Whole-disc OCR renders
+   their few small captions a handful of pixels tall and reads nothing, so this does what a
+   production OCR pipeline does: erase non-character-scale ink, close characters into
+   lines, crop each line with a margin, normalize it to ~48 px tall, and recognize it alone
+   in single-line mode. It derives its own axis from the line-blob orientation histogram
+   (using a *round* closing kernel — a horizontal one can only ever form lines that are
+   already horizontal) and excludes the rim, whose curved legal text produces line blobs at
+   every angle. Only words at confidence ≥ 75 with three or more characters may vote on the
+   180° flip: inverted text yields plausible-looking tokens at ordinary confidence, and by
+   raw score those outvote the genuine reading.
+10. **Adaptive escalation and stability** — when OCR evidence is weak, scoring is repeated
+    at higher resolution (2560 px, small print often becomes decisive), and indecisive
+    results get a rotation-stability probe: the disc is re-estimated pre-rotated by 37°,
+    and an answer that tracks the rotation proves the estimator follows real label
+    features, upgrading the confidence classically — no model call needed. A structure veto
+    is final here: an estimator locked onto a slanted text block tracks the probe perfectly,
+    so stability must not resurrect what structure refuted.
+11. **Vision-model fallback (optional)** — labels with text running in several directions
+    (radial text, opposing blocks, arc-set titles) leave OCR unable to separate the
+    orientations. For those, a vision LLM can pick: the model is never asked for an angle —
+    it answers a multiple-choice question over thumbnails rendered at the precise candidate
+    angles. When a dominant badge has pinned the axis, the model is only ever offered the
+    two rotations that keep it horizontal, and its veto-walk may not land on a
+    structure-misaligned alternative. See configuration below.
+12. **Rotation** — `warpAffine` with Lanczos4 about the **disc center** (not the image
+    center, so an off-center disc stays in place), destination size = source size, uncovered
+    corners filled with the median scanner-background color sampled from the image corners.
+13. **Metadata** — OpenCV's PNG encoder drops ancillary chunks, so `pHYs` (DPI), `iCCP`
+    (ICC profile), `sRGB`, `gAMA` and `cHRM` are copied verbatim from the source file into
+    the output via a minimal PNG chunk parser.
 
 Images are processed in parallel across all CPU cores (tesseract is pinned to one thread
 per invocation to avoid oversubscription).
+
+## Logo templates
+
+`CdScanStraightener/Templates/*.png` are grayscale crops of marks that are always printed
+upright. They are copied next to the executable at build time; drop a new PNG in and it is
+picked up on the next build. Cropping rules, each learned from a template that failed:
+
+- **Crop from a disc you have verified is straight.** A crop inherits any tilt in the scan
+  it came from, and every disc that template then matches inherits that same error.
+- **Only the reusable mark.** A game title, a "CD Multimedia" caption or a "STEREO" line
+  next to the logo produces a template that matches exactly one disc and nothing else.
+- **Keep a margin around it.** Tight crops starve the corner descriptors of context: one
+  publisher badge went from no match at all to 43 inliers on nothing but added margin.
+- **Normalize low-contrast foil.** Silver-on-iridescent marks need `-normalize` or ORB
+  finds no features in them.
+- **Variants are separate templates.** The same nominal logo printed as an engraved outline
+  and as a solid badge does not match itself across those renditions; rating badges are the
+  exception, since their frame and footer carry most of the features.
+
+A useful shortcut: any disc the tool already orients correctly is itself a template source
+for its siblings — that is how a boxed set's third disc gets anchored from the two that
+already worked.
+
 
 ## Vision-model configuration
 
@@ -196,14 +264,19 @@ rest of the run and processing continues without it. Files it decided are tagged
 
 ## Known limitations
 
-- **Picture-only labels** (no text) can't be oriented by any text-based method; they score
-  low confidence and are copied unrotated with a warning.
+- **Picture-only labels** (no text) can't be oriented by any text-based method. If they
+  carry a known mark the logo anchor still handles them; otherwise they score low
+  confidence and are copied unrotated with a warning.
+- **Labels whose only text is circumferential** — plain music CDs whose track list and
+  legal notice both curve around the rim — leave nothing straight to read. Curved text is
+  locally horizontal at every rotation, so it cannot settle the 180° flip.
 - **Deliberately tilted or arc-set artwork** is inherently ambiguous — the design's
   "upright" is an artistic choice. These end up in the low-confidence set for the vision
   fallback or manual review.
 - **Data-side scans** have nothing to orient by.
-- **Non-Latin scripts** need the matching tesseract traineddata; the fallback typography
-  heuristic assumes Latin ascender/descender statistics.
+- **Non-Latin scripts** need the matching tesseract traineddata (`jpn` and friends ship
+  with the full tessdata install); the fallback typography heuristic assumes Latin
+  ascender/descender statistics.
 - Rotation by arbitrary angles necessarily resamples pixels once (Lanczos); only exact
   0°/90°/180°/270° would be mathematically lossless, and straightening generally isn't.
 
