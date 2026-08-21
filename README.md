@@ -28,7 +28,7 @@ is **rotation only**:
 - same canvas size and pixel dimensions — nothing is cropped or scaled,
 - Lanczos resampling for maximum detail retention,
 - resolution (DPI) preserved,
-- ICC profile and color-management chunks preserved.
+- ICC profile, color-management, EXIF and textual metadata preserved.
 
 ## Requirements
 
@@ -187,8 +187,13 @@ below, in order, each of which can settle the answer on its own:
     center, so an off-center disc stays in place), destination size = source size, uncovered
     corners filled with the median scanner-background color sampled from the image corners.
 13. **Metadata** — OpenCV's PNG encoder drops ancillary chunks, so `pHYs` (DPI), `iCCP`
-    (ICC profile), `sRGB`, `gAMA` and `cHRM` are copied verbatim from the source file into
-    the output via a minimal PNG chunk parser.
+    (ICC profile), `sRGB`, `gAMA`, `cHRM`, `eXIf` (EXIF/IFD0 — scanner make and model,
+    software, timestamps, the EXIF sub-IFD) and every textual chunk (`tEXt`, `zTXt`,
+    `iTXt`, which may repeat) are copied from the source file into the output via a minimal
+    PNG chunk parser. The one field not copied verbatim is EXIF **`Orientation`**, which is
+    forced to 1 with the chunk CRC recomputed: the straightened pixels already are the
+    intended orientation, so inheriting a rotated value would make a viewer that honours it
+    rotate the image a second time.
 
 Images are processed in parallel across all CPU cores (tesseract is pinned to one thread
 per invocation to avoid oversubscription).
@@ -282,5 +287,6 @@ rest of the run and processing continues without it. Files it decided are tagged
 
 ## Tests
 
-`dotnet test` covers PNG chunk roundtripping, synthetic disc detection, rotation recovery
+`dotnet test` covers PNG chunk roundtripping (including EXIF orientation normalization
+and repeated textual chunks), synthetic disc detection, rotation recovery
 to ±0.5°, low-confidence behavior on featureless discs, and canvas-size preservation.

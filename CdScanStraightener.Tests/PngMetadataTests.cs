@@ -63,6 +63,67 @@ public sealed class PngMetadataTests : IDisposable
         Assert.Equal(8, reread.Rows);
     }
 
+    /// <summary>Builds a little-endian eXIf chunk whose IFD0 holds a single Orientation tag.</summary>
+    private static byte[] MakeExif(ushort orientation)
+    {
+        var data = new byte[8 + 2 + 12 + 4];
+        data[0] = data[1] = (byte)'I';
+        BinaryPrimitives.WriteUInt16LittleEndian(data.AsSpan(2), 42);
+        BinaryPrimitives.WriteUInt32LittleEndian(data.AsSpan(4), 8); // IFD0 at offset 8
+        BinaryPrimitives.WriteUInt16LittleEndian(data.AsSpan(8), 1); // one entry
+        BinaryPrimitives.WriteUInt16LittleEndian(data.AsSpan(10), 0x0112);
+        BinaryPrimitives.WriteUInt16LittleEndian(data.AsSpan(12), 3); // SHORT
+        BinaryPrimitives.WriteUInt32LittleEndian(data.AsSpan(14), 1);
+        BinaryPrimitives.WriteUInt16LittleEndian(data.AsSpan(18), orientation);
+
+        return MakeChunk("eXIf", data);
+    }
+
+    private static ushort OrientationOf(byte[] exifChunk) =>
+        BinaryPrimitives.ReadUInt16LittleEndian(exifChunk.AsSpan(8 + 18));
+
+    [Fact]
+    public void ExifIsPreservedWithOrientationNormalized()
+    {
+        var src = WritePng("exif-src.png");
+        var dst = WritePng("exif-dst.png");
+
+        // A source claiming a rotated orientation: the straightened pixels already are the
+        // intended orientation, so the tag must come out normal or viewers rotate twice.
+        PngMetadata.WritePreservedChunks(src, [MakeExif(6)]);
+
+        var chunks = PngMetadata.ReadPreservedChunks(src);
+        var exif   = Assert.Single(chunks);
+        Assert.Equal(1, OrientationOf(exif));
+
+        PngMetadata.WritePreservedChunks(dst, chunks);
+        Assert.Equal(1, OrientationOf(Assert.Single(PngMetadata.ReadPreservedChunks(dst))));
+
+        using var reread = Cv2.ImRead(dst);
+        Assert.False(reread.Empty());
+    }
+
+    [Fact]
+    public void EveryTextChunkSurvives()
+    {
+        var src = WritePng("text-src.png");
+        var dst = WritePng("text-dst.png");
+
+        // Textual chunks may legitimately repeat — scanners write Make, Model and Software
+        // as three separate tEXt chunks, and keeping only the first would lose two of them.
+        byte[] Text(string keyword, string value) =>
+            MakeChunk("tEXt", System.Text.Encoding.Latin1.GetBytes($"{keyword}\0{value}"));
+
+        var written = new[] { Text("Make", "HP"), Text("Model", "ScanJet"), Text("Software", "test") };
+        PngMetadata.WritePreservedChunks(src, written);
+
+        var chunks = PngMetadata.ReadPreservedChunks(src);
+        Assert.Equal(3, chunks.Count);
+
+        PngMetadata.WritePreservedChunks(dst, chunks);
+        Assert.Equal(written, PngMetadata.ReadPreservedChunks(dst));
+    }
+
     [Fact]
     public void NoMetadataMeansNoChunks()
     {
