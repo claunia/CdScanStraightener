@@ -21,7 +21,7 @@ public static class InlayPipeline
 
         if(src.Empty()) throw new InvalidDataException($"Could not read image: {inputPath}");
 
-        var inlay = InlayDetector.Detect(src);
+        var inlay = InlayDetector.Detect(src, PngMetadata.ReadDpi(inputPath));
 
         if(inlay is null)
         {

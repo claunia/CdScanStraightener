@@ -14,12 +14,23 @@ public sealed record Inlay(double Skew, Rect Box, Scalar Background);
 /// so it works when the item matches the scanner lid: black prints on the black lid, white
 /// paper on the white lid. Physical edges are long, straight and sharp, and the outermost
 /// one on each side is the item's. Where an edge leaves no trace at all (white paper, white
-/// lid, the side away from the light) the side falls back to the printed content.
+/// lid, the side away from the light) the side falls back to the printed content, or — given
+/// the scan's DPI — to a standard inlay size measured from the opposite edge.
 /// </summary>
 public static class InlayDetector
 {
     /// <summary>Detection runs on a copy scaled down to this longest side.</summary>
     private const int WorkSide = 1200;
+
+    /// <summary>Common physical inlay formats in millimetres (width × height, either orientation).</summary>
+    private static readonly (double W, double H)[] FormatsMm =
+    [
+        (120, 120), // CD front inlay / booklet
+        (240, 120), // CD booklet, unfolded
+        (151, 118), // CD tray inlay with spines
+        (138, 118), // CD tray inlay without spines
+        (273, 183), // DVD / Wii / PS2 keep-case cover
+    ];
 
     /// <summary>Median color of the outer ~1% frame — the scanner background.</summary>
     public static Scalar DetectBackground(Mat src)
@@ -59,8 +70,11 @@ public static class InlayDetector
         return new Scalar(b[b.Count / 2], g[g.Count / 2], r[r.Count / 2]);
     }
 
-    /// <summary>Detects the inlay, or null if the scan shows nothing but background.</summary>
-    public static Inlay? Detect(Mat src)
+    /// <summary>
+    /// Detects the inlay, or null if the scan shows nothing but background. <paramref name="dpi"/>
+    /// enables placing invisible edges at standard inlay sizes.
+    /// </summary>
+    public static Inlay? Detect(Mat src, double? dpi = null)
     {
         var scale = Math.Min(1.0, (double)WorkSide / Math.Max(src.Width, src.Height));
 
@@ -72,8 +86,9 @@ public static class InlayDetector
             src.CopyTo(small);
 
         var background = DetectBackground(small);
+        var workDpi    = dpi * scale;
 
-        var best = Analyze(small, background, null);
+        var best = Analyze(small, background, null, workDpi);
 
         if(best is null) return null;
 
@@ -85,7 +100,7 @@ public static class InlayDetector
         {
             foreach(var candidate in new[] { best.Skew + residual, best.Skew - residual })
             {
-                var retry = Analyze(small, background, candidate);
+                var retry = Analyze(small, background, candidate, workDpi);
 
                 if(retry is not null && Math.Abs(retry.SideResidual()) < Math.Abs(residual))
                 {
@@ -122,7 +137,7 @@ public static class InlayDetector
     /// One detection pass at a given skew (estimated when null). Returns null when nothing
     /// but background is found.
     /// </summary>
-    private static Analysis? Analyze(Mat small, Scalar background, double? skew)
+    private static Analysis? Analyze(Mat small, Scalar background, double? skew, double? dpi)
     {
         int w = small.Width, h = small.Height;
 
@@ -170,6 +185,9 @@ public static class InlayDetector
 
         // Cast shadows and penumbras only show on a light lid.
         if(lightLid > 128) analysis.TrimShadows();
+
+        // White paper on a white lid: invisible sides go to a standard size if one fits.
+        if(lightLid > 200 && dpi is {} d && !analysis.Certain.All(c => c)) analysis.SnapToFormat(d);
 
         return analysis;
     }
@@ -611,6 +629,80 @@ public static class InlayDetector
             while(i + 1 < profile.Count - 1 && profile[i + 1] > low + 0.25 * total) i++;
 
             return idx[i + 1];
+        }
+
+        /// <summary>
+        /// Places sides without certain evidence at a standard inlay size measured from a side with
+        /// a line, as long as all content still fits; picks the format needing the least invented
+        /// margin. Keeps the box when no format fits.
+        /// </summary>
+        public void SnapToFormat(double dpi)
+        {
+            var    tol      = 3 / 25.4 * dpi;
+            (int L, int T, int R, int B)? best = null;
+            double bestCost = double.MaxValue;
+
+            foreach(var (fw, fh) in FormatsMm.Concat(FormatsMm.Select(f => (f.H, f.W))))
+            {
+                var  output = Box;
+                var  cost   = 0.0;
+                var  ok     = true;
+
+                foreach(var (axis, dimMm) in new[] { (0, fw), (1, fh) })
+                {
+                    int lo = axis, hi = axis + 2;
+                    var dim     = dimMm / 25.4 * dpi;
+                    var size    = axis == 0 ? W : H;
+                    var boxLo   = Get(Box, lo);
+                    var boxHi   = Get(Box, hi);
+                    var contLo  = Get(Content, lo);
+                    var contHi  = Get(Content, hi);
+                    var options = new List<(double Cost, int Lo, int Hi)>();
+
+                    if(Lines[lo] && Lines[hi] && Math.Abs(boxHi - boxLo - dim) <= tol) options.Add((0, boxLo, boxHi));
+
+                    if(Lines[lo] && !Certain[hi])
+                    {
+                        var e = boxLo + dim;
+
+                        if(e >= contHi - tol && e <= size - 1 + tol)
+                            options.Add((e - contHi + (Certain[lo] ? 0 : tol), boxLo,
+                                         (int)Math.Min(size - 1, Math.Round(e))));
+                    }
+
+                    if(Lines[hi] && !Certain[lo])
+                    {
+                        var e = boxHi - dim;
+
+                        if(e >= -tol && e <= contLo + tol)
+                            options.Add((contLo - e + (Certain[hi] ? 0 : tol), (int)Math.Max(0, Math.Round(e)),
+                                         boxHi));
+                    }
+
+                    // No line on this axis: keep it, if the content fits the format at all.
+                    if(options.Count == 0 && !Certain[lo] && !Certain[hi] && contHi - contLo <= dim + tol)
+                        options.Add((tol, boxLo, boxHi));
+
+                    if(options.Count == 0)
+                    {
+                        ok = false;
+
+                        break;
+                    }
+
+                    var pick = options.MinBy(o => o.Cost);
+                    output =  With(With(output, lo, pick.Lo), hi, pick.Hi);
+                    cost   += pick.Cost;
+                }
+
+                if(ok && cost < bestCost)
+                {
+                    best     = output;
+                    bestCost = cost;
+                }
+            }
+
+            if(best is {} b) Box = b;
         }
 
         /// <summary>
