@@ -117,6 +117,8 @@ public static class InlayDetector
             skew = SkewFromLines(both);
         }
 
+        DropScannerLines(ex0, ey0, skew);
+
         using var m       = Cv2.GetRotationMatrix2D(new Point2f(w / 2f, h / 2f), skew, 1.0);
         var       rotated = new Mat();
         var       ex      = new Mat();
@@ -254,6 +256,37 @@ public static class InlayDetector
         var near  = found.Where(f => f.Angle >= lo && f.Angle <= hi).ToArray();
 
         return near.Sum(f => f.Angle * f.Length) / near.Sum(f => f.Length);
+    }
+
+    /// <summary>
+    /// Scanner bed and lid edges are perfectly axis-aligned and long. A line from border to
+    /// border is never an item edge, and once the item is measurably tilted its own edges cannot
+    /// form long axis-aligned runs either — so erase such lines from the unrotated edge maps.
+    /// </summary>
+    private static void DropScannerLines(Mat ex, Mat ey, double skew)
+    {
+        int w = ex.Cols, h = ex.Rows;
+        var f = Math.Abs(skew) >= 0.5 ? 0.75 : 0.97;
+
+        var cols = LongestRuns(ex, true, w, h);
+
+        for(var x = 0; x < w; x++)
+        {
+            if(cols[x] < f * h) continue;
+
+            using var roi = ex[new Rect(Math.Max(0, x - 1), 0, Math.Min(w, x + 2) - Math.Max(0, x - 1), h)];
+            roi.SetTo(Scalar.All(0));
+        }
+
+        var rows = LongestRuns(ey, false, w, h);
+
+        for(var y = 0; y < h; y++)
+        {
+            if(rows[y] < f * w) continue;
+
+            using var roi = ey[new Rect(0, Math.Max(0, y - 1), w, Math.Min(h, y + 2) - Math.Max(0, y - 1))];
+            roi.SetTo(Scalar.All(0));
+        }
     }
 
     /// <summary>
