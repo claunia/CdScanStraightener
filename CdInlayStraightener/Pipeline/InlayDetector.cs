@@ -140,6 +140,11 @@ public static class InlayDetector
         analysis.Content = content.Value;
         analysis.FindSides();
 
+        var lightLid = (background.Val0 + background.Val1 + background.Val2) / 3;
+
+        // Cast shadows and penumbras only show on a light lid.
+        if(lightLid > 128) analysis.TrimShadows();
+
         return analysis;
     }
 
@@ -446,6 +451,109 @@ public static class InlayDetector
                                  : eyWide[new Rect(box.L, pos, box.R - box.L + 1, 1)];
 
             return Cv2.CountNonZero(line) >= 0.85 * line.Total();
+        }
+
+        /// <summary>
+        /// On a light lid an item casts a shadow or penumbra: a grey, gradual, monotonic darkening
+        /// towards the item. A side that landed in one moves in to where the profile has nearly
+        /// reached the item.
+        /// </summary>
+        public void TrimShadows()
+        {
+            using var gray = new Mat();
+            using var hsv  = new Mat();
+            Cv2.CvtColor(rotated, gray, ColorConversionCodes.BGR2GRAY);
+            Cv2.CvtColor(rotated, hsv, ColorConversionCodes.BGR2HSV);
+
+            using var sat = new Mat();
+            Cv2.ExtractChannel(hsv, sat, 1);
+
+            gray.GetArray(out byte[] lum);
+            sat.GetArray(out byte[] chroma);
+
+            var box = Box;
+
+            for(var side = 0; side < 4; side++)
+                if(ShadowEdge(lum, chroma, box, side) is {} edge)
+                    box = With(box, side, edge);
+
+            Box = box;
+        }
+
+        private int? ShadowEdge(byte[] lum, byte[] chroma, (int L, int T, int R, int B) box, int side)
+        {
+            var vertical = side is 0 or 2;
+            var n        = vertical ? W : H;
+            var depth    = (int)(0.15 * (vertical ? box.R - box.L : box.B - box.T));
+            var edge     = Get(box, side);
+            var inward   = side is 0 or 1 ? 1 : -1;
+
+            // Profile across the side: medians over the middle 60% of its length.
+            int bandFrom, bandTo;
+
+            if(vertical)
+                (bandFrom, bandTo) = (box.T + (box.B - box.T) / 5, box.B - (box.B - box.T) / 5);
+            else
+                (bandFrom, bandTo) = (box.L + (box.R - box.L) / 5, box.R - (box.R - box.L) / 5);
+
+            if(bandTo <= bandFrom) return null;
+
+            var idx = new List<int>();
+
+            for(var k = -3; k < depth; k++)
+            {
+                var p = edge + inward * k;
+
+                if(p >= 0 && p < n) idx.Add(p);
+            }
+
+            if(idx.Count < 8) return null;
+
+            var band = new byte[bandTo - bandFrom];
+
+            double Median(byte[] plane, int p)
+            {
+                for(var j = bandFrom; j < bandTo; j++) band[j - bandFrom] = vertical ? plane[j * W + p] : plane[p * W + j];
+
+                Array.Sort(band);
+
+                return band[band.Length / 2];
+            }
+
+            var profile = new List<double>();
+
+            // Only the initial non-increasing stretch can be a shadow ramp.
+            foreach(var p in idx)
+            {
+                var v = Median(lum, p);
+
+                if(profile.Count > 0 && v - profile[^1] > 6) break;
+
+                profile.Add(v);
+            }
+
+            if(profile.Count < 5) return null;
+
+            var low   = profile.Min();
+            var total = profile[0] - low;
+
+            if(total < 40) return null;
+
+            // Shadows are grey; a color fading into the paper white is artwork.
+            var sats = idx.Take(profile.Count).Select(p => Median(chroma, p)).Order().ToArray();
+
+            if(sats[sats.Length / 2] > 40) return null;
+
+            // A shadow is gradual; a printed or physical edge goes from light to dark in 1–2 px.
+            var midway = profile.Count(v => v > low + 0.25 * total && v < profile[0] - 0.25 * total);
+
+            if(midway < 3) return null;
+
+            var i = 0;
+
+            while(i + 1 < profile.Count - 1 && profile[i + 1] > low + 0.25 * total) i++;
+
+            return idx[i + 1];
         }
 
         public void Dump(string dir)
