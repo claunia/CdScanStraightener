@@ -21,7 +21,25 @@ public static class InlayPipeline
 
         if(src.Empty()) throw new InvalidDataException($"Could not read image: {inputPath}");
 
-        var inlay = InlayDetector.Detect(src, PngMetadata.ReadDpi(inputPath));
+        var dpi = PngMetadata.ReadDpi(inputPath);
+
+        // A known console cover layout fixes geometry and orientation outright.
+        using(var wii = WiiCover.Detect(src, dpi))
+        {
+            if(wii is not null)
+            {
+                if(!options.DryRun)
+                {
+                    Cv2.ImWrite(outputPath, wii.Image);
+                    PngMetadata.WritePreservedChunks(outputPath, PngMetadata.ReadPreservedChunks(inputPath));
+                }
+
+                return new InlayResult(Path.GetFileName(inputPath), wii.Skew, wii.Quarters * 90,
+                                       double.PositiveInfinity, wii.Image.Width, wii.Image.Height, true);
+            }
+        }
+
+        var inlay = InlayDetector.Detect(src, dpi);
 
         if(inlay is null)
         {

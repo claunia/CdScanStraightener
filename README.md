@@ -10,9 +10,16 @@ Two command-line tools for cleaning up optical-media scans:
   border to border or staying axis-aligned while the item is tilted. Where a white-on-white
   paper edge is invisible, the side goes to the printed content, or — using the scan's DPI — to a
   standard inlay size (CD front/booklet/tray, DVD/Wii cover) measured from the opposite edge.
-  It then deskews, fixes 90°/180° orientation via OCR (losslessly, quarter turns never resample),
-  and crops just inside the detected edges (`--trim` sets the extra inward margin, default 2 px).
-  Output dimensions change; DPI and ICC metadata are preserved. Usage mirrors the disc tool:
+  **Wii keep-case covers** are recognized by their printed layout instead: the spine "Wii"
+  wordmark and the colored triangle at the spine's bottom fix orientation, rotation and scale,
+  and a model of the cover (183×273 mm, measured from the triangle corner) places the edges —
+  which matters because a 273 mm cover lies against the scanner bed's edge, where no edge is
+  visible at all. An edge only moves inward of the model where the scan shows plain lid beyond
+  it. These covers come out upright without OCR.
+  Everything else is deskewed, fixed for 90°/180° orientation via OCR (losslessly, quarter
+  turns never resample), and cropped just inside the detected edges (`--trim` sets the extra
+  inward margin, default 2 px). Output dimensions change; DPI and ICC metadata are preserved.
+  Usage mirrors the disc tool:
 
   ```sh
   dotnet run --project CdInlayStraightener -- -i scans/ -o straightened/ [--trim 2] [--report r.csv]

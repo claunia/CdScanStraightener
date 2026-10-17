@@ -79,4 +79,55 @@ public sealed class InlayTests
         using var scan = new Mat(1000, 1400, MatType.CV_8UC3, Scalar.White);
         Assert.Null(InlayDetector.Detect(scan));
     }
+
+    /// <summary>
+    /// Synthetic 300 dpi Wii cover scan: 2156×3224 px paper against the scanner's edge on a white
+    /// lid, spine logo and spine triangle where the layout puts them, tilted and turned a quarter.
+    /// </summary>
+    private static Mat MakeWiiScan(double tilt)
+    {
+        const int cx = 2350, cy = 1540;
+        var       lid = new Scalar(251, 251, 251);
+
+        using var canvas = new Mat(3240, 2550, MatType.CV_8UC3, lid);
+        Cv2.Rectangle(canvas, new Rect(cx - 2156, cy - 1534, 2156, 3224), new Scalar(244, 244, 244), -1);
+
+        using var logo = Cv2.ImRead(Path.Combine(AppContext.BaseDirectory, "Templates", "wii-spine.png"),
+                                    ImreadModes.Color);
+
+        logo.CopyTo(canvas[new Rect(cx - 2075, cy + 30, logo.Width, logo.Height)]);
+
+        Cv2.FillConvexPoly(canvas, [new Point(cx, cy), new Point(cx - 160, cy), new Point(cx, cy + 165)],
+                           new Scalar(200, 150, 230));
+
+        using var m      = Cv2.GetRotationMatrix2D(new Point2f(1275, 1620), tilt, 1.0);
+        using var tilted = new Mat();
+        Cv2.WarpAffine(canvas, tilted, m, canvas.Size(), InterpolationFlags.Linear, BorderTypes.Constant, lid);
+
+        var scan = new Mat();
+        Cv2.Rotate(tilted, scan, RotateFlags.Rotate90Counterclockwise);
+
+        return scan;
+    }
+
+    [Fact]
+    public void WiiCoverIsFramedByItsLandmarks()
+    {
+        using var scan  = MakeWiiScan(0.6);
+        using var cover = WiiCover.Detect(scan, 300);
+
+        Assert.NotNull(cover);
+        Assert.Equal(0.6, Math.Abs(cover.Skew), 0.15);
+
+        // Upright and whole: 273 mm wide, 183 mm tall, less what the tilt pushed off the scan.
+        Assert.InRange(cover.Image.Width, 3180, 3230);
+        Assert.InRange(cover.Image.Height, 2120, 2160);
+    }
+
+    [Fact]
+    public void PlainInlayIsNotTakenForAWiiCover()
+    {
+        using var scan = MakeScan(Scalar.White, 2);
+        Assert.Null(WiiCover.Detect(scan, 300));
+    }
 }
