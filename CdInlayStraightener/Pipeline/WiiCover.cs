@@ -77,18 +77,35 @@ public static class WiiCover
 
         if(LocateLogo(normGray, template, f, ws) is not {} logo) return null;
 
-        // 3. The triangle corner, where the model expects it.
-        if(Corner(normalized, logo.X + Along * f, logo.Y + Above * f) is not {} corner) return null;
+        // 3. The triangle corner, where the model expects it: rotation and true scale. A cover
+        // scanned short of its full 183 mm (Nintendo Selects scanned landscape) loses the corner
+        // off the scan; then the spine's own cross-section gives the rotation, and the corner
+        // follows from the logo and the model.
+        double theta, k;
+        Point2d corner;
 
-        var dx    = corner.X - logo.X;
-        var dy    = corner.Y - logo.Y;
-        var theta = Math.Atan2(dy, dx) - Math.Atan2(Above, Along);
+        if(Corner(normalized, logo.X + Along * f, logo.Y + Above * f) is {} found)
+        {
+            var dx = found.X - logo.X;
+            var dy = found.Y - logo.Y;
+            theta  = Math.Atan2(dy, dx) - Math.Atan2(Above, Along);
+            k      = Math.Sqrt(dx * dx + dy * dy) / (Math.Sqrt(Along * Along + Above * Above) * f);
+            corner = found;
 
-        // Measured against modeled landmark distance: the scanner's true scale relative to its DPI.
-        var k = Math.Sqrt(dx * dx + dy * dy) / (Math.Sqrt(Along * Along + Above * Above) * f);
+            // Implausible scale means the corner is something else.
+            if(Math.Abs(k - 1) > 0.02) return null;
+        }
+        else if(SpineSlope(normGray, logo, template.Width * f, template.Height * f, f) is {} slope)
+        {
+            theta = slope;
+            k     = 1;
 
-        // Implausible scale means the corner is something else.
-        if(Math.Abs(k - 1) > 0.02) return null;
+            var a0     = Math.Atan2(Above, Along) + theta;
+            var length = Math.Sqrt(Along * Along + Above * Above) * f;
+            corner = new Point2d(logo.X + length * Math.Cos(a0), logo.Y + length * Math.Sin(a0));
+        }
+        else
+            return null;
 
         var scale = f * k;
 
@@ -119,20 +136,34 @@ public static class WiiCover
         rotGray.GetArray(out byte[] px);
         valid.GetArray(out byte[] ok);
 
-        var lid = LidLevel(px, ok, w, h, (int)l - 30);
+        // When the cover fills the scan there is no lid to compare with, and the model stands.
+        if(LidLevel(px, ok, w, h, l, t, r, b, 30 * scale) is {} lid)
+        {
+            var rows = new Profile(px, ok, w, h, true, (int)(l + 150 * scale), (int)(r - 150 * scale));
 
-        var rows = new Profile(px, ok, w, h, true, (int)(l + 150 * scale), (int)(r - 150 * scale));
+            if(rows.EdgeFrom(0, (int)(t + 80 * scale), 1, lid) is {} front && front > t - 80 * scale)
+                t = Math.Max(t, front);
 
-        if(rows.EdgeFrom(0, (int)(t + 80 * scale), 1, lid) is {} front && front > t - 80 * scale)
-            t = Math.Max(t, front);
+            if(rows.EdgeFrom(h - 1, (int)(b - 80 * scale), -1, lid) is {} back && back < b + 80 * scale)
+                b = Math.Min(b, back + 1);
 
-        if(rows.EdgeFrom(h - 1, (int)(b - 80 * scale), -1, lid) is {} back && back < b + 80 * scale)
-            b = Math.Min(b, back + 1);
+            var cols = new Profile(px, ok, w, h, false, (int)(Math.Max(t, 0) + 150 * scale),
+                                   (int)(Math.Min(b, h) - 150 * scale));
 
-        var cols = new Profile(px, ok, w, h, false, (int)(Math.Max(t, 0) + 150 * scale),
-                               (int)(Math.Min(b, h) - 150 * scale));
+            if(cols.EdgeFrom(0, (int)(l + 40 * scale), 1, lid) is {} top && top > l - 40 * scale)
+                l = Math.Max(l, top);
+        }
+        else
+        {
+            // No lid anywhere: the scan is all cover, so a side the model puts just inside the scan
+            // border (layouts differ by a few millimetres, e.g. Nintendo Selects) goes to it.
+            var slack = 60 * scale;
 
-        if(cols.EdgeFrom(0, (int)(l + 40 * scale), 1, lid) is {} top && top > l - 40 * scale) l = Math.Max(l, top);
+            if(l > 0 && l < slack) l = 0;
+            if(t > 0 && t < slack) t = 0;
+            if(r < w && r > w - slack) r = w;
+            if(b < h && b > h - slack) b = h;
+        }
 
         // 6. Only what the scanner saw: clip to the scan, then pull in sides that still touch the
         // wedges the rotation brought in from outside it.
@@ -362,22 +393,149 @@ public static class WiiCover
         return new Point2d(x0 + rights[rights.Count / 2], y0 + top);
     }
 
-    /// <summary>Median of the scanned pixels left of <paramref name="limit"/>: the lid beyond the cover's top end.</summary>
-    private static double LidLevel(byte[] px, byte[] ok, int w, int h, int limit)
+    /// <summary>
+    /// Median of the scanned pixels clearly outside the model box — the lid — or null when too
+    /// few exist to tell (the cover fills the scan).
+    /// </summary>
+    private static double? LidLevel(byte[] px, byte[] ok, int w, int h, double l, double t, double r, double b,
+                                    double margin)
     {
-        limit = Math.Clamp(limit, 5, w);
         var values = new List<byte>();
 
         for(var y = 0; y < h; y += 3)
-            for(var x = 0; x < limit; x += 3)
-                if(ok[y * w + x] != 0)
-                    values.Add(px[y * w + x]);
+            for(var x = 0; x < w; x += 3)
+            {
+                var outside = x < l - margin || x > r + margin || y < t - margin || y > b + margin;
 
-        if(values.Count < 1000) return 250;
+                if(outside && ok[y * w + x] != 0) values.Add(px[y * w + x]);
+            }
+
+        // 2000 samples on a 3 px grid: a strip of lid at least ~10 mm by a cover's length.
+        if(values.Count < 2000) return null;
 
         values.Sort();
 
         return values[values.Count / 2];
+    }
+
+    /// <summary>
+    /// Rotation of the spine from its cross-section: the profile across the spine (fold shading,
+    /// art borders) is the same all along it, so its shift between blocks along the spine,
+    /// line-fitted, is the tilt. Null when too few blocks agree.
+    /// </summary>
+    private static double? SpineSlope(Mat gray, Point2d logo, double logoW, double logoH, double f)
+    {
+        int w = gray.Width, h = gray.Height;
+        var block = Math.Max(8, (int)(40 * f));
+        var reach = Math.Max(8, (int)(40 * f));
+        var y0    = (int)(logo.Y - 200 * f);
+        var y1    = (int)(logo.Y + logoH + 200 * f);
+
+        gray.GetArray(out byte[] px);
+
+        double[] Profile(int x0)
+        {
+            var p      = new double[y1 - y0 + 2 * reach];
+            var column = new byte[block];
+
+            for(var i = 0; i < p.Length; i++)
+            {
+                var y = Math.Clamp(y0 - reach + i, 0, h - 1);
+
+                for(var j = 0; j < block; j++) column[j] = px[y * w + Math.Min(w - 1, x0 + j)];
+
+                Array.Sort(column);
+                p[i] = column[block / 2];
+            }
+
+            return p;
+        }
+
+        static double[] Normalize(ReadOnlySpan<double> s)
+        {
+            double mean = 0, sd = 0;
+            foreach(var v in s) mean += v;
+            mean /= s.Length;
+            foreach(var v in s) sd += (v - mean) * (v - mean);
+            sd = Math.Sqrt(sd / s.Length) + 1e-6;
+
+            var o = new double[s.Length];
+            for(var i = 0; i < s.Length; i++) o[i] = (s[i] - mean) / sd;
+
+            return o;
+        }
+
+        double[]? reference = null;
+        var       xs        = new List<double>();
+        var       ds        = new List<double>();
+
+        for(var x0 = (int)(logo.X + logoW + 20 * f); x0 < Math.Min(w - block, logo.X + Along * f); x0 += block)
+        {
+            var p = Profile(x0);
+
+            if(reference is null)
+            {
+                reference = Normalize(p.AsSpan(reach, p.Length - 2 * reach));
+
+                continue;
+            }
+
+            double best = -2;
+            var    shift = 0;
+
+            for(var d = -reach; d <= reach; d++)
+            {
+                var s = Normalize(p.AsSpan(reach + d, reference.Length));
+                var c = 0.0;
+
+                for(var i = 0; i < s.Length; i++) c += s[i] * reference[i];
+
+                c /= s.Length;
+
+                if(c > best)
+                {
+                    best  = c;
+                    shift = d;
+                }
+            }
+
+            if(best <= 0.5) continue;
+
+            xs.Add(x0);
+            ds.Add(shift);
+        }
+
+        if(xs.Count < 10) return null;
+
+        // Robust line: the pair whose line has the most points within 2 px, then least squares.
+        bool[]? inliers = null;
+        var     most    = 0;
+
+        for(var i = 0; i < xs.Count; i++)
+            for(var j = i + 1; j < xs.Count; j++)
+            {
+                var slope = (ds[j] - ds[i]) / (xs[j] - xs[i]);
+
+                if(Math.Abs(slope) > 0.1) continue;
+
+                var on = xs.Select((x, n) => Math.Abs(ds[n] - (ds[i] + slope * (x - xs[i]))) < 2).ToArray();
+                var c  = on.Count(b => b);
+
+                if(c <= most) continue;
+
+                most    = c;
+                inliers = on;
+            }
+
+        if(inliers is null || most < 10 || most < 0.6 * xs.Count) return null;
+
+        var fx = xs.Where((_, n) => inliers[n]).ToArray();
+        var fd = ds.Where((_, n) => inliers[n]).ToArray();
+        var mx = fx.Average();
+        var md = fd.Average();
+        var fit = fx.Zip(fd, (x, d) => (x - mx) * (d - md)).Sum() / fx.Sum(x => (x - mx) * (x - mx));
+
+        return Math.Atan(fit);
     }
 
     /// <summary>Per-row (or per-column) median and spread of scanned pixels over a band, computed on demand.</summary>
