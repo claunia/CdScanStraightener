@@ -73,9 +73,31 @@ public static class InlayDetector
 
         var background = DetectBackground(small);
 
-        var best = Analyze(small, background);
+        var best = Analyze(small, background, null);
 
         if(best is null) return null;
+
+        // The first skew comes from all long lines in the scan; refine it from the edge pixels
+        // along the four detected sides only, where artwork cannot vote.
+        var residual = best.SideResidual();
+
+        if(Math.Abs(residual) > 0.1)
+        {
+            foreach(var candidate in new[] { best.Skew + residual, best.Skew - residual })
+            {
+                var retry = Analyze(small, background, candidate);
+
+                if(retry is not null && Math.Abs(retry.SideResidual()) < Math.Abs(residual))
+                {
+                    best.Dispose();
+                    best = retry;
+
+                    break;
+                }
+
+                retry?.Dispose();
+            }
+        }
 
         using(best)
         {
@@ -96,8 +118,11 @@ public static class InlayDetector
         }
     }
 
-    /// <summary>One detection pass. Returns null when nothing but background is found.</summary>
-    private static Analysis? Analyze(Mat small, Scalar background)
+    /// <summary>
+    /// One detection pass at a given skew (estimated when null). Returns null when nothing
+    /// but background is found.
+    /// </summary>
+    private static Analysis? Analyze(Mat small, Scalar background, double? skew)
     {
         int w = small.Width, h = small.Height;
 
@@ -109,17 +134,16 @@ public static class InlayDetector
         using var ex0 = SharpEdges(img, true, threshold);
         using var ey0 = SharpEdges(img, false, threshold);
 
-        double skew;
-
-        using(var both = new Mat())
+        if(skew is null)
         {
+            using var both = new Mat();
             Cv2.BitwiseOr(ex0, ey0, both);
             skew = SkewFromLines(both);
         }
 
-        DropScannerLines(ex0, ey0, skew);
+        DropScannerLines(ex0, ey0, skew.Value);
 
-        using var m       = Cv2.GetRotationMatrix2D(new Point2f(w / 2f, h / 2f), skew, 1.0);
+        using var m       = Cv2.GetRotationMatrix2D(new Point2f(w / 2f, h / 2f), skew.Value, 1.0);
         var       rotated = new Mat();
         var       ex      = new Mat();
         var       ey      = new Mat();
@@ -128,7 +152,7 @@ public static class InlayDetector
         Cv2.WarpAffine(ex0, ex, m, small.Size(), InterpolationFlags.Nearest);
         Cv2.WarpAffine(ey0, ey, m, small.Size(), InterpolationFlags.Nearest);
 
-        var analysis = new Analysis(skew, rotated, ex, ey);
+        var analysis = new Analysis(skew.Value, rotated, ex, ey);
 
         var content = ContentBox(rotated, background);
 
@@ -587,6 +611,78 @@ public static class InlayDetector
             while(i + 1 < profile.Count - 1 && profile[i + 1] > low + 0.25 * total) i++;
 
             return idx[i + 1];
+        }
+
+        /// <summary>
+        /// Remaining tilt (degrees) of the detected sides: line fit through the outermost edge
+        /// pixel of every row (column) in a band around each side, length-weighted.
+        /// </summary>
+        public double SideResidual()
+        {
+            var band = Math.Max(4, (int)(0.03 * Math.Max(W, H)));
+
+            ex.GetArray(out byte[] exPx);
+            ey.GetArray(out byte[] eyPx);
+
+            double sum = 0, weight = 0;
+
+            for(var side = 0; side < 4; side++)
+            {
+                var points = new List<Point2f>();
+                var at     = Get(Box, side);
+
+                if(side is 0 or 2)
+                {
+                    int x0 = Math.Max(0, at - band), x1 = Math.Min(W, at + band + 1);
+
+                    for(var y = Box.T + (Box.B - Box.T) / 10; y < Box.B - (Box.B - Box.T) / 10; y++)
+                    {
+                        int? hit = null;
+
+                        for(var x = x0; x < x1; x++)
+                        {
+                            if(exPx[y * W + x] == 0) continue;
+
+                            hit = x;
+
+                            if(side == 0) break;
+                        }
+
+                        if(hit is {} hx) points.Add(new Point2f(hx, y));
+                    }
+                }
+                else
+                {
+                    int y0 = Math.Max(0, at - band), y1 = Math.Min(H, at + band + 1);
+
+                    for(var x = Box.L + (Box.R - Box.L) / 10; x < Box.R - (Box.R - Box.L) / 10; x++)
+                    {
+                        int? hit = null;
+
+                        for(var y = y0; y < y1; y++)
+                        {
+                            if(eyPx[y * W + x] == 0) continue;
+
+                            hit = y;
+
+                            if(side == 1) break;
+                        }
+
+                        if(hit is {} hy) points.Add(new Point2f(x, hy));
+                    }
+                }
+
+                if(points.Count < 20) continue;
+
+                var line  = Cv2.FitLine(points, DistanceTypes.Huber, 0, 0.01, 0.01);
+                var angle = Math.Atan2(line.Vy, line.Vx) * 180 / Math.PI;
+                angle = ((angle + 45) % 90 + 90) % 90 - 45;
+
+                sum    += angle * points.Count;
+                weight += points.Count;
+            }
+
+            return weight > 0 ? sum / weight : 0;
         }
 
         public void Dump(string dir)
