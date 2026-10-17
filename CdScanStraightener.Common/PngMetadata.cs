@@ -39,6 +39,25 @@ public static class PngMetadata
         return [.. SingleTypes.Where(single.ContainsKey).Select(t => single[t]), .. repeatable];
     }
 
+    /// <summary>Horizontal resolution from the pHYs chunk in dots per inch, or null when absent or unitless.</summary>
+    public static double? ReadDpi(string path)
+    {
+        var bytes = File.ReadAllBytes(path);
+
+        foreach(var (type, offset, totalLen) in EnumerateChunks(bytes))
+        {
+            if(type != "pHYs" || totalLen < 12 + 9) continue;
+
+            var pixelsPerUnit = BinaryPrimitives.ReadUInt32BigEndian(bytes.AsSpan(offset + 8, 4));
+            var unit          = bytes[offset + 16];
+
+            // Unit 1 is the metre; 0 only gives an aspect ratio.
+            return unit == 1 && pixelsPerUnit > 0 ? pixelsPerUnit * 0.0254 : null;
+        }
+
+        return null;
+    }
+
     /// <summary>
     /// Inserts the given raw chunks into the PNG at <paramref name="path"/> immediately after IHDR,
     /// dropping any chunks of the same types the encoder may have written, and rewrites the file.
