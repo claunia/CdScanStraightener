@@ -97,7 +97,9 @@ public static class LogoAnchor
     {
         if(!IsAvailable) return null;
 
-        using var orb       = ORB.Create(nFeatures: 12000);
+        // Busy label art outscores soft-edged logos, so a small budget starves the logo of
+        // keypoints: at 12000 an upright 1536 px Xbox disc kept only 157 of its ~530.
+        using var orb       = ORB.Create(nFeatures: 20000);
         using var sceneDesc = new Mat();
         orb.DetectAndCompute(gray, null, out var sceneKp, sceneDesc);
 
