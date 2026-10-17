@@ -3,11 +3,16 @@
 Two command-line tools for cleaning up optical-media scans:
 
 - **CdScanStraightener** — straightens scanned CD/DVD **discs** (rotation only, described below).
-- **CdInlayStraightener** — straightens scanned **inlays/booklets**: detects the rectangle on a
-  light or dark scanner background, deskews it, fixes 90°/180° orientation via OCR (losslessly,
-  quarter turns never resample), and crops so **no background pixels remain** (inscribed crop
-  with a checked border postcondition; `--trim` sets the inward margin, default 2 px). Output
-  dimensions change; DPI and ICC metadata are preserved. Usage mirrors the disc tool:
+- **CdInlayStraightener** — straightens scanned **inlays/booklets, box sides and cartridges**:
+  finds the item by its outline — the outermost long, sharp, straight edge on each side — so it
+  works even when the item matches the lid (black prints on a black lid, white paper on a white
+  lid). Soft cast shadows are not edges; scanner bed/lid lines are told apart by running
+  border to border or staying axis-aligned while the item is tilted. Where a white-on-white
+  paper edge is invisible, the side goes to the printed content, or — using the scan's DPI — to a
+  standard inlay size (CD front/booklet/tray, DVD/Wii cover) measured from the opposite edge.
+  It then deskews, fixes 90°/180° orientation via OCR (losslessly, quarter turns never resample),
+  and crops just inside the detected edges (`--trim` sets the extra inward margin, default 2 px).
+  Output dimensions change; DPI and ICC metadata are preserved. Usage mirrors the disc tool:
 
   ```sh
   dotnet run --project CdInlayStraightener -- -i scans/ -o straightened/ [--trim 2] [--report r.csv]
