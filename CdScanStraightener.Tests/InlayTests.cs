@@ -33,7 +33,7 @@ public sealed class InlayTests
         var       inlay = InlayDetector.Detect(scan);
 
         Assert.NotNull(inlay);
-        Assert.Equal(4.2, -InlayDetector.Skew(inlay.Rect), 0.3);
+        Assert.Equal(4.2, -inlay.Skew, 0.3);
     }
 
     [Theory]
@@ -46,7 +46,7 @@ public sealed class InlayTests
         using var scan  = MakeScan(bg, -3.1);
         var       inlay = InlayDetector.Detect(scan)!;
 
-        using var crop = Cropper.DeskewAndCrop(scan, inlay, InlayDetector.Skew(inlay.Rect), 2);
+        using var crop = Cropper.DeskewAndCrop(scan, inlay, 2);
 
         Assert.False(Cropper.BorderTouchesBackground(crop, new Rect(0, 0, crop.Width, crop.Height), bg));
 

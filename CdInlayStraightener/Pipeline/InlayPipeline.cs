@@ -35,9 +35,9 @@ public static class InlayPipeline
             return new InlayResult(Path.GetFileName(inputPath), 0, 0, 0, src.Width, src.Height, false);
         }
 
-        var skew = InlayDetector.Skew(inlay.Rect);
+        var skew = inlay.Skew;
 
-        using var cropped = Cropper.DeskewAndCrop(src, inlay, skew, options.Trim);
+        using var cropped = Cropper.DeskewAndCrop(src, inlay, options.Trim);
 
         var orientation = options.ForceOrientation is {} forced
                               ? new Orientation(forced, double.PositiveInfinity)
