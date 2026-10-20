@@ -384,6 +384,8 @@ public static class InlayDetector
         using var kernel = Cv2.GetStructuringElement(MorphShapes.Rect, new Size(5, 5));
         Cv2.MorphologyEx(mask, mask, MorphTypes.Open, kernel);
 
+        DropBedStrips(mask);
+
         using var points = new Mat();
         Cv2.FindNonZero(mask, points);
 
@@ -392,6 +394,58 @@ public static class InlayDetector
         var bb = Cv2.BoundingRect(points);
 
         return (bb.Left, bb.Top, bb.Right - 1, bb.Bottom - 1);
+    }
+
+    /// <summary>
+    /// A scan that reaches past the lid shows the dark scanner bed as a strip along a border,
+    /// running the full length of the scan. It is not content, and counting it puts the content
+    /// box on the scan border, where no inlay side can be looked for. A strip is the band of
+    /// lines from the border up to the first background-only line, within 3% of the scan, of
+    /// which at least one is covered for half its length; an inlay running off the scan has no
+    /// background gap and is kept.
+    /// </summary>
+    private static void DropBedStrips(Mat mask)
+    {
+        int w = mask.Cols, h = mask.Rows;
+
+        mask.GetArray(out byte[] px);
+
+        var colCover = new int[w];
+        var rowCover = new int[h];
+
+        for(var y = 0; y < h; y++)
+            for(var x = 0; x < w; x++)
+            {
+                if(px[y * w + x] == 0) continue;
+
+                colCover[x]++;
+                rowCover[y]++;
+            }
+
+        int? StripEnd(int[] cover, int length, int from, int step)
+        {
+            var reach = Math.Max(4, (int)(0.03 * cover.Length));
+            var long_ = false;
+
+            for(var k = 0; k < reach; k++)
+            {
+                var i = from + step * k;
+
+                if(cover[i] <= 0.02 * length) return long_ ? i : null;
+
+                if(cover[i] >= 0.5 * length) long_ = true;
+            }
+
+            return null;
+        }
+
+        if(StripEnd(colCover, h, 0, 1) is {} l) mask[new Rect(0, 0, l, h)].SetTo(Scalar.All(0));
+
+        if(StripEnd(colCover, h, w - 1, -1) is {} r) mask[new Rect(r + 1, 0, w - r - 1, h)].SetTo(Scalar.All(0));
+
+        if(StripEnd(rowCover, w, 0, 1) is {} t) mask[new Rect(0, 0, w, t)].SetTo(Scalar.All(0));
+
+        if(StripEnd(rowCover, w, h - 1, -1) is {} b) mask[new Rect(0, b + 1, w, h - b - 1)].SetTo(Scalar.All(0));
     }
 
     /// <summary>One detection pass on the deskewed working-scale scan.</summary>
