@@ -12,7 +12,6 @@
     <PackageReference Include="Microsoft.Extensions.Configuration.EnvironmentVariables" Version="10.0.11" />
     <PackageReference Include="Microsoft.Extensions.Configuration.Json" Version="10.0.11" />
     <PackageReference Include="OpenCvSharp4" Version="4.13.0.20260627" />
-    <PackageReference Include="OpenCvSharp4.official.runtime.linux-x64" Version="4.13.0.20260627" />
     <PackageReference Include="System.CommandLine" Version="2.0.11" />
   </ItemGroup>
 
@@ -22,6 +21,27 @@
 
   <ItemGroup>
     <ProjectReference Include="..\CdScanStraightener.Common\CdScanStraightener.Common.csproj" />
+  </ItemGroup>
+
+  <!-- Publishing for a runtime (-r) yields one self-contained executable; Templates/ and
+       appsettings.json stay beside it so they can still be edited. -->
+  <PropertyGroup Condition="'$(RuntimeIdentifier)' != ''">
+    <SelfContained>true</SelfContained>
+    <PublishSingleFile>true</PublishSingleFile>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
+    <DebugType>none</DebugType>
+    <AllowedReferenceRelatedFileExtensions>none</AllowedReferenceRelatedFileExtensions>
+  </PropertyGroup>
+
+  <!-- OpenCV native library for the target runtime; linux-x64 when no -r is given. -->
+  <ItemGroup>
+    <PackageReference Include="OpenCvSharp4.official.runtime.linux-x64" Version="4.13.0.20260627" Condition="'$(RuntimeIdentifier)' == '' Or '$(RuntimeIdentifier)' == 'linux-x64'" />
+    <PackageReference Include="OpenCvSharp4.runtime.linux-arm64" Version="4.13.0.20260627" Condition="'$(RuntimeIdentifier)' == 'linux-arm64'" />
+    <PackageReference Include="OpenCvSharp4.runtime.win" Version="4.13.0.20260627" Condition="'$(RuntimeIdentifier)' == 'win-x64'" />
+    <PackageReference Include="OpenCvSharp4.runtime.win-arm64" Version="4.13.0.20260627" Condition="'$(RuntimeIdentifier)' == 'win-arm64'" />
+    <PackageReference Include="OpenCvSharp4.runtime.osx.x64" Version="4.13.0.20260627" Condition="'$(RuntimeIdentifier)' == 'osx-x64'" />
+    <PackageReference Include="OpenCvSharp4.runtime.osx.arm64" Version="4.13.0.20260627" Condition="'$(RuntimeIdentifier)' == 'osx-arm64'" />
   </ItemGroup>
 
   <ItemGroup>

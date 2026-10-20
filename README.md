@@ -47,7 +47,7 @@ is **rotation only**:
 | Component | Purpose | Required |
 |---|---|---|
 | .NET 10 SDK | build and run | yes |
-| OpenCV native library | bundled via `OpenCvSharp4.official.runtime.linux-x64` | yes (add the matching `OpenCvSharp4.runtime.*` package on Windows/macOS) |
+| OpenCV native library | bundled via the `OpenCvSharp4.*runtime.*` package matching the runtime (linux-x64 when none is given) | yes |
 | [Tesseract](https://github.com/tesseract-ocr/tesseract) + `eng` traineddata on `PATH` | orientation selection by OCR legibility | strongly recommended — without it a much weaker typography heuristic is used |
 | An OpenAI-compatible vision endpoint | fallback for ambiguous labels | optional |
 
@@ -57,6 +57,17 @@ is **rotation only**:
 dotnet build
 dotnet test     # unit tests
 ```
+
+A self-contained single-file executable for one platform (`linux-x64`, `linux-arm64`,
+`win-x64`, `win-arm64`, `osx-x64` or `osx-arm64`); `Templates/` and `appsettings.json` stay
+beside it:
+
+```sh
+dotnet publish CdScanStraightener -c Release -r osx-arm64 -o out
+```
+
+Pushing a `v*` tag builds both tools for all six platforms and attaches them to a GitHub
+release (`.github/workflows/release.yml`).
 
 ## Usage
 
