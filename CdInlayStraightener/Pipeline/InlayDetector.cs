@@ -184,7 +184,7 @@ public static class InlayDetector
         var lightLid = (background.Val0 + background.Val1 + background.Val2) / 3;
 
         // Cast shadows and penumbras only show on a light lid.
-        if(lightLid > 128) analysis.TrimShadows();
+        if(lightLid > 128) analysis.TrimShadows(dpi);
 
         // White paper on a white lid: invisible sides go to a standard size if one fits.
         if(lightLid > 200 && dpi is {} d && !analysis.Certain.All(c => c)) analysis.SnapToFormat(d);
@@ -585,10 +585,16 @@ public static class InlayDetector
         /// <summary>
         /// On a light lid an item casts a shadow or penumbra: a grey, gradual, monotonic darkening
         /// towards the item. A side that landed in one moves in to where the profile has nearly
-        /// reached the item.
+        /// reached the item. A shadow is only a couple of millimetres wide; a longer ramp is
+        /// artwork fading towards the edge (a gradient, a pale print) and is left alone.
         /// </summary>
-        public void TrimShadows()
+        public void TrimShadows(double? dpi)
         {
+            // 2.5 mm, or 2% of the side's extent when the DPI is unknown.
+            var maxWidth = dpi is {} d
+                               ? 2.5 / 25.4 * d
+                               : 0.02 * Math.Min(Box.R - Box.L, Box.B - Box.T);
+
             using var gray = new Mat();
             using var hsv  = new Mat();
             Cv2.CvtColor(rotated, gray, ColorConversionCodes.BGR2GRAY);
@@ -603,7 +609,7 @@ public static class InlayDetector
             var box = Box;
 
             for(var side = 0; side < 4; side++)
-                if(ShadowEdge(lum, chroma, box, side) is {} edge)
+                if(ShadowEdge(lum, chroma, box, side) is {} edge && Math.Abs(edge - Get(box, side)) <= maxWidth)
                     box = With(box, side, edge);
 
             Box = box;
