@@ -32,6 +32,8 @@
 
   <ItemGroup>
     <Content Include="Templates/*.png" CopyToOutputDirectory="PreserveNewest" />
+    <!-- Logo templates shared with the disc straightener, for orienting box faces in box mode. -->
+    <Content Include="../CdScanStraightener/Templates/*.png" Link="LogoTemplates/%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
   <PropertyGroup>

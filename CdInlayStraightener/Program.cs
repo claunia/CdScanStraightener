@@ -57,6 +57,17 @@ var overwriteOpt = new Option<bool>("--overwrite")
     Description = "Overwrite existing files in the output folder (default: skip them).",
 };
 
+var boxOpt = new Option<bool>("--box")
+{
+    Description = "Scans are of 3D retail boxes: crop to the flat face inside its folded edges, " +
+                  "and turn the face portrait before choosing upright or upside down.",
+};
+
+var landscapeOpt = new Option<bool>("--landscape")
+{
+    Description = "With --box: the box faces are landscape rather than portrait.",
+};
+
 var root = new RootCommand("Straightens scanned CD inlays/booklets: detects the rectangle on a light or dark " +
                            "scanner background, deskews it, fixes 90°/180° orientation via OCR (losslessly), and " +
                            "crops so no background pixels remain. DPI and ICC metadata are preserved.")
@@ -71,6 +82,8 @@ var root = new RootCommand("Straightens scanned CD inlays/booklets: detects the 
     forceOrientationOpt,
     ocrLangsOpt,
     overwriteOpt,
+    boxOpt,
+    landscapeOpt,
 };
 
 root.SetAction((parseResult, ct) =>
@@ -96,6 +109,8 @@ root.SetAction((parseResult, ct) =>
         ForceOrientation = forced,
         OcrLangs         = parseResult.GetValue(ocrLangsOpt)!,
         Overwrite        = parseResult.GetValue(overwriteOpt),
+        Box              = parseResult.GetValue(boxOpt),
+        Landscape        = parseResult.GetValue(landscapeOpt),
     };
 
     return BatchRunner.RunAsync(options, ct);

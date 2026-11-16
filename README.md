@@ -29,6 +29,26 @@ Two command-line tools for cleaning up optical-media scans:
   kept deskewed but not turned), `--ocr-langs`, `--dry-run`, `--overwrite`. Undetectable scans
   are copied untouched and flagged. No AI is involved anywhere in this tool.
 
+  **Retail boxes** need `--box`. A box is 3D: only its face lies on the glass, and around it
+  the scan shows the side walls rising off the glass — an out-of-focus smear of stripes running
+  along each side, soft ramps where the light falls off, then the box's silhouette edge, often
+  worn or torn. The outline detector takes the smear's outermost line, so in box mode each side
+  then walks inward from it, at full resolution, through the smear's structure (background,
+  stripe edges, ramps without print texture) to the last edge before the printed face. Faces
+  are assumed portrait (`--landscape` for landscape boxes), which leaves upright versus upside
+  down. A known logo decides that first — keypoint templates in either polarity (white-on-black
+  print included), and a silhouette match for plain shapes such as the Apple logo, which
+  keypoints cannot see — then OCR between the two turns. `--force-orientation` still
+  overrides everything.
+
+  ```sh
+  dotnet run --project CdInlayStraightener -- -i boxes/ -o straightened/ --box [--landscape]
+  ```
+
+  To compare a batch against hand-made crops, `python3 tools/compare-crops.py <out> <reference>`
+  (numpy, scipy, Pillow) prints per side how many millimetres the output keeps beyond the
+  reference, and flags differing orientations.
+
 ## CdScanStraightener (discs)
 
 A command-line tool that automatically straightens scanned CD/DVD images.
@@ -225,7 +245,10 @@ per invocation to avoid oversubscription).
 
 `CdScanStraightener/Templates/*.png` are grayscale crops of marks that are always printed
 upright. They are copied next to the executable at build time; drop a new PNG in and it is
-picked up on the next build. Cropping rules, each learned from a template that failed:
+picked up on the next build. CdInlayStraightener gets the same set as `LogoTemplates/` for
+orienting box faces; templates named in `SilhouetteAnchor` (currently `apple`) are also
+matched by shape, for plain logos with no corners for keypoints. Cropping rules, each learned
+from a template that failed:
 
 - **Crop from a disc you have verified is straight.** A crop inherits any tilt in the scan
   it came from, and every disc that template then matches inherits that same error.

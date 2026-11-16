@@ -11,16 +11,25 @@ public static class Cropper
     /// </summary>
     public static Mat DeskewAndCrop(Mat src, Inlay inlay, int trim)
     {
+        using var rotated = Deskew(src, inlay);
+
+        return Crop(rotated, inlay.Box, trim);
+    }
+
+    /// <summary>The whole scan deskewed by the inlay's skew about the image center (Lanczos, background fill).</summary>
+    public static Mat Deskew(Mat src, Inlay inlay)
+    {
         using var rot     = Cv2.GetRotationMatrix2D(new Point2f(src.Width / 2f, src.Height / 2f), inlay.Skew, 1.0);
-        using var rotated = new Mat();
+        var       rotated = new Mat();
 
         Cv2.WarpAffine(src, rotated, rot, src.Size(), InterpolationFlags.Lanczos4, BorderTypes.Constant,
                        inlay.Background);
 
-        var crop = Shrink(inlay.Box, trim, rotated.Size());
-
-        return rotated[crop].Clone();
+        return rotated;
     }
+
+    /// <summary><paramref name="box"/> of a deskewed scan, trimmed inward by <paramref name="trim"/> pixels per side.</summary>
+    public static Mat Crop(Mat deskewed, Rect box, int trim) => deskewed[Shrink(box, trim, deskewed.Size())].Clone();
 
     private static Rect Shrink(Rect r, int by, Size bounds)
     {

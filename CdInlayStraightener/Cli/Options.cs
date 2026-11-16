@@ -12,4 +12,6 @@ public sealed record Options
     public          int?          ForceOrientation { get; init; }
     public          string        OcrLangs      { get; init; } = "auto";
     public          bool          Overwrite     { get; init; }
+    public          bool          Box           { get; init; }
+    public          bool          Landscape     { get; init; }
 }

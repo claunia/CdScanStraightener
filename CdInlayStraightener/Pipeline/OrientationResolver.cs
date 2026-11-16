@@ -13,8 +13,14 @@ public static class OrientationResolver
 {
     private const int OcrMaxSide = 1536;
 
-    public static Orientation Resolve(Mat crop, string scratchDir)
+    /// <summary>
+    /// Picks among <paramref name="quarters"/> (counterclockwise quarter turns; all four when
+    /// null). Confidence is the best score over the runner-up's among those allowed.
+    /// </summary>
+    public static Orientation Resolve(Mat crop, string scratchDir, int[]? quarters = null)
     {
+        quarters ??= [0, 1, 2, 3];
+
         if(!TesseractOcr.IsAvailable) return new Orientation(0, 0);
 
         using var gray = new Mat();
@@ -30,7 +36,7 @@ public static class OrientationResolver
 
         var scores = new double[4];
 
-        for(var q = 0; q < 4; q++)
+        foreach(var q in quarters)
         {
             using var view = Rotate(small, q);
             var       tmp  = Path.Combine(scratchDir, $"inlay-{Guid.NewGuid():N}.png");
@@ -46,11 +52,11 @@ public static class OrientationResolver
             }
         }
 
-        var best = Array.IndexOf(scores, scores.Max());
+        var best = quarters.MaxBy(q => scores[q]);
 
         if(scores[best] <= 0) return new Orientation(0, 0);
 
-        var second = scores.Where((_, i) => i != best).Max();
+        var second = quarters.Where(q => q != best).Select(q => scores[q]).DefaultIfEmpty(0).Max();
 
         return new Orientation(best * 90, second > 0 ? scores[best] / second : 10.0);
     }

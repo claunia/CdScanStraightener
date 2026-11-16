@@ -33,6 +33,9 @@ public static class BatchRunner
         if(!string.Equals(options.OcrLangs, "auto", StringComparison.OrdinalIgnoreCase))
             TesseractOcr.LanguageOverride = options.OcrLangs;
 
+        // The disc straightener's logo templates, copied beside this executable.
+        LogoAnchor.TemplateFolder = "LogoTemplates";
+
         var       results  = new ConcurrentBag<InlayResult>();
         var       failures = new ConcurrentBag<(string File, string Error)>();
         var       done     = 0;
