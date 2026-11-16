@@ -1,6 +1,6 @@
 using OpenCvSharp;
 
-namespace CdScanStraightener.Pipeline;
+namespace CdScanStraightener.Common;
 
 /// <summary>
 /// Orientation anchoring by known-logo matching: rating squares (USK/PEGI), platform
@@ -36,13 +36,19 @@ public static class LogoAnchor
 
     public static bool IsAvailable => Renditions.Value.Count > 0;
 
+    /// <summary>
+    /// Folder of logo templates, looked up beside the executable and then in the working
+    /// directory. Set before the first match; templates load once per process.
+    /// </summary>
+    public static string TemplateFolder { get; set; } = "Templates";
+
     private static List<Rendition> LoadRenditions()
     {
         var list = new List<Rendition>();
 
         var dirs = new[]
         {
-            Path.Combine(AppContext.BaseDirectory, "Templates"), Path.Combine(Environment.CurrentDirectory, "Templates")
+            Path.Combine(AppContext.BaseDirectory, TemplateFolder), Path.Combine(Environment.CurrentDirectory, TemplateFolder)
         };
 
         var dir = dirs.FirstOrDefault(Directory.Exists);
